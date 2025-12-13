@@ -1,0 +1,389 @@
+---
+title: "Explaining migration peaks"
+author: "Bart Hoekstra"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+library(data.table)
+library(tidyverse)
+library(mlr3verse)
+library(mlr3db)
+library(tictoc)
+library(iml)
+library(patchwork)
+library(colorspace)
+```
+
+# Preparing the data for model training
+
+```{r}
+source("R/functions_training.R")
+
+radar <- "nlhrw"
+season <- "autumn"
+
+task <- create_task(radar, season = season)
+selected_features_file <- sprintf("data/raw/model_features/fs_selected_top_features_%s_%s_dynamic.RDS", radar, season)
+train_features <- readRDS(selected_features_file)
+task$select(train_features)
+
+learner <- lrn("regr.lightgbm", 
+               objective = "tweedie",
+               verbose = 2,
+               num_threads = 10)
+
+best_params <- readRDS(sprintf("data/raw/model_params/fs_twdie_%s_%s_dynamic_regr.rmse_best_params_regr.rmse.RDS", radar,
+                               season))
+best_params$num_threads <- parallel::detectCores()-1
+learner$param_set$values <- best_params
+
+set.seed(42)
+cv <- rsmp("cv", folds = 8)
+cv$instantiate(task)
+
+tic(paste0("Training model for ", radar, " ", season))
+learner$train(task, row_ids = cv$train_set(1))
+toc()
+
+# features in test data
+credit_x = tsk_german$data(rows = split$test,
+  cols = tsk_german$feature_names)
+# target in test data
+credit_y = tsk_german$data(rows = split$test,
+  cols = tsk_german$target_names)
+
+data_x <- task$data(rows = cv$test_set(1),
+                    cols = task$feature_names)
+data_y <- task$data(rows = cv$test_set(1),
+                    cols = task$target_names)
+
+predictor <- Predictor$new(learner, data = data_x, y = data_y)
+
+data_df <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% 6:10) %>%
+  select(-c(period_rank_mtr))
+data_tr <- task$data(rows = cv$test_set(1), cols = c(task$target_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% 6:10) %>%
+  pull(dens)
+
+data_expl <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr == 1:5) %>%
+  select(-c(period_rank_mtr))
+
+predictor <- Predictor$new(learner, data = data_df, y = data_tr)
+
+shapley = Shapley$new(predictor, x.interest = as.data.frame(data_expl)[2, ],
+  sample.size = 100)
+shapley$plot()
+
+```
+
+```{r}
+data_goodnights <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% 11:20) %>%
+  select(-c(period_rank_mtr))
+
+data_goodnights <- task$data(cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% 11:20) %>%
+  select(-c(period_rank_mtr))
+
+data_bestnights <- task$data(cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% 1:10) %>%
+  select(-c(period_rank_mtr))
+
+data_worstnights <- task$data(cols = c(task$feature_names, "period_rank_mtr")) %>%
+  filter(period_rank_mtr %in% (max(data_worstnights$period_rank_mtr)-10):(max(data_worstnights$period_rank_mtr))) %>%
+  select(-c(period_rank_mtr))
+
+data_all <- task$data(cols = c(task$feature_names, "period_rank_mtr")) %>%
+  select(-c(period_rank_mtr))
+
+sv_goodnights <- shapviz(learner$model, as.matrix(data_goodnights))
+sv_bestnights <- shapviz(learner$model, as.matrix(data_bestnights))
+sv_worstnights <- shapviz(learner$model, as.matrix(data_worstnights))
+sv_all <- shapviz(learner$model, as.matrix(data_all))
+```
+
+```{r}
+sv_importance(sv_goodnights, kind = "beeswarm")
+```
+
+```{r}
+sv_importance(sv_bestnights, kind = "beeswarm")
+```
+
+```{r}
+sv_importance(sv_worstnights, kind = "beeswarm")
+```
+
+```{r}
+sv_importance(sv_all, kind = "beeswarm")
+```
+
+```{r}
+data <- task$data(cols = c(task$feature_names, "period_rank_mtr"))
+
+out <- list()
+
+for (rank in sort(unique(data$period_rank_mtr))) {
+  print(rank)
+  # if (rank > 10) next
+  tic(paste0("Calculating SHAP values for night rank: ", rank))
+  sv <- shapviz(learner$model, as.matrix(data %>% filter(period_rank_mtr == rank) %>% select(-c(period_rank_mtr))))
+  toc()
+  out <- append(out, list(sv))
+  
+}
+
+sv_all_ranked <- do.call("rbind", out)
+
+```
+
+```{r}
+out_all <- lapply(out, function(x) sv_importance(x, kind = "no"))
+out_names <- lapply(seq_along(out_all), function(x) data.frame(varname = names(out_all[[x]]), varrank = 1:50, nightrank = x))
+out_df_ranks <- bind_rows(out_names)
+out_df_shap <- bind_rows(out_all) %>% rownames_to_column(var = "nightrank")
+```
+
+```{r}
+out_df_ranks %>%
+  filter(varname %in% c("height", "yday", "rdr_blh")) %>%
+  ggplot() +
+  geom_point(aes(x = nightrank, y = varrank, color = varname)) +
+  geom_line(aes(x = nightrank, y = varrank, color = varname))
+```
+
+```{r}
+out_df_shap %>%
+  mutate(nightrank = as.numeric(nightrank)) %>%
+  pivot_longer(cols = -c(nightrank), names_to = "varname", values_to = "shap_value") %>%
+  # filter(!varname %in% c("height", "yday", "solar_elev", "solar_elev_change")) %>%
+  filter(varname %in% c("rdr_u", "rdr_v", "rdr_blh", "fl_inst_lsrr", "nr_birds")) %>%
+  ggplot() +
+  geom_point(aes(x = nightrank, y = shap_value, color = varname, group = varname)) +
+  geom_line(aes(x = nightrank, y = shap_value, color = varname, group = varname))
+```
+
+```{r}
+variable <- "rdr_blh"
+
+shap_values_var <- get_shap_values(sva)[, variable]
+values_var <- get_feature_values(sva)[, variable]
+ranks <- data$period_rank_mtr
+heights <- data$height
+
+var_data <- data.frame(rank = ranks, val = values_var, shap = shap_values_var, height = heights)
+
+var_data %>%
+  mutate(height_coarse = cut_interval(height, length = 250)) %>%
+  filter(height <= 1000) %>%
+  ggplot() +
+  # geom_point(aes(x = rank, y = blh, color = shap)) +
+  stat_summary_2d(aes(x = rank, y = val, z = shap), fun = \(x) mean(x), bins = 15) +
+  # scale_fill_viridis_c(option = "inferno", name = "Shap value") +
+  # scale_fill_distiller(palette = 'RdBu') + 
+  scale_fill_continuous_divergingx(palette = 'RdBu', mid = 0) + 
+  labs(x = "Night rank", y = variable) +
+  facet_wrap(vars(height_coarse)) +
+  coord_flip() +
+  scale_x_reverse()
+
+```
+
+
+```{r}
+vars <- colnames(sva)
+
+classify_var <- function(v) {
+  if (str_detect(v, "rdr_")) return("Radar-level")
+  if (str_detect(v, "fl_")) return("En-route")
+  if (str_detect(v, "stp_")) return("Stopover")
+  if (v %in% c("yday", "solar_elev", "solar_azim", "solar_elevation_change")) return("Phenology")
+  if (v == "height") return("Height")
+  if (v == "nr_birds") return("Radar-level")
+}
+
+var_class <- vapply(vars, classify_var, character(1))
+
+collapse <- split(vars, var_class)
+
+S_collapsed <- collapse_shap(sva$S, collapse)
+
+classify_var_envir <- function(v) {
+  if (str_detect(v, "_u|_v")) return("Wind")
+  if (str_detect(v, "_t|_t2m")) return("Temperature")
+  if (str_detect(v, "_lsrr|_crr")) return("Precipitation")
+  if (str_detect(v, "_msl")) return("Pressure")
+  if (str_detect(v, "_blh")) return("Boundary layer height")
+  if (str_detect(v, "_cc|_lcc|_mcc|_hcc|_cbh")) return("Cloud cover")
+  if (str_detect(v, "_r|_q")) return("Humidity")
+  if (str_detect(v, "_lsm")) return("Land-sea mask")
+  if (v == "height") return("Height")
+  if (v == "yday") return("Day of year")
+  if (str_detect(v, "solar_")) return("Time of night")
+  if (str_detect(v, "_lat|_lon")) return("Take-off location")
+  if (v == "nr_birds") return("Nr. of birds")
+}
+
+var_class_envir <- vapply(vars, classify_var_envir, character(1))
+collapse_envir <- split(vars, var_class_envir)
+S_collapsed_envir <- collapse_shap(sva$S, collapse_envir)
+
+
+var_label <- setNames(
+  paste(var_class[names(var_class_envir)], var_class_envir, sep = " - "),
+  names(var_class_envir)
+)
+collapse_label <- split(vars, var_label)
+S_collapsed_label <- collapse_shap(sva$S, collapse_label)
+
+
+data_plot <- task$data(cols = c("height", "period_rank_mtr", "year", "datetime")) %>%
+  bind_cols(S_collapsed) %>%
+  bind_cols(truth = task$truth(), pred = pred)
+
+data_plot_envir <- task$data(cols = c("height", "period_rank_mtr", "year", "datetime")) %>%
+  bind_cols(S_collapsed_envir) %>%
+  bind_cols(truth = task$truth(), pred = pred)
+
+data_plot_label <- task$data(cols = c("height", "period_rank_mtr", "year", "datetime")) %>%
+  bind_cols(S_collapsed_label) %>%
+  bind_cols(truth = task$truth(), pred = pred)
+
+midnight_breaks <- data_plot_label %>%
+  filter(year == 2022, month(datetime) == 10) %>%
+  filter(hour(datetime) == 0, minute(datetime) == 0) %>%
+  distinct(datetime) %>%
+  pull(datetime) %>%
+  as.character()
+
+data_plot %>%
+  filter(year == 2022) %>%
+  filter(lubridate::month(datetime) == 10) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  ggplot(aes(x = datetime)) +
+  geom_tile(aes(y = height, fill = truth)) +
+  scale_fill_viridis_c(trans = "sqrt", option = "magma",  na.value = 0, name = "Bird dens.") +
+  scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) format(as.POSIXct(sub(" UTC$", "", x), tz = "UTC"), "%b %-d"),
+                   position = "top") +
+  theme_classic(base_size = 14) +
+  coord_cartesian(expand = FALSE) +
+  theme(#axis.ticks.x = element_blank(),
+        axis.text.x = element_text(angle = -45, hjust = 1, vjust = -1),
+        axis.title.x = element_blank(),
+        panel.background = element_rect(fill = "black"),) +
+  labs(y = "Height [m]")-> vpts_truth
+
+data_plot %>%
+  filter(year == 2022) %>%
+  filter(lubridate::month(datetime) == 10) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  ggplot(aes(x = datetime)) +
+  geom_raster(aes(y = height, fill = pred)) +
+  scale_fill_viridis_c(option = "inferno", trans = "sqrt") +
+  dark_theme_gray() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank()) -> vpts_pred
+
+data_plot %>%
+  filter(year == 2022) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  ggplot(aes(x = datetime)) +
+  geom_raster(aes(y = height, fill = `En-route`)) +
+  scale_fill_continuous_divergingx(palette = 'RdBu', mid = 0) + 
+  dark_theme_gray() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())
+
+data_plot %>%
+  filter(year == 2022) %>%
+  filter(lubridate::month(datetime) == 10) %>%
+  select(datetime, height, Height, `En-route`, Stopover, `Radar-level`, Phenology) %>%
+  group_by(datetime) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  # select(-c(height)) %>%
+  pivot_longer(cols = -c(datetime, height), names_to = "Factor", values_to = "SHAP") %>%
+  filter(Factor != "Height") %>%
+  mutate(Factor = fct_relevel(Factor, c("Radar-level", "En-route", "Stopover", "Phenology"))) %>%
+  ggplot(aes(x = datetime, y = height, fill = SHAP)) +
+  geom_tile() +
+  scale_fill_continuous_diverging(palette = "Berlin", mid = 0, p1 = 1, p2 = 1, l1 = 70, na.value = 0) + 
+    scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) format(as.POSIXct(sub(" UTC$", "", x), tz = "UTC"), "%b %-d")) +
+  theme_classic(base_size = 14) +
+  coord_cartesian(expand = FALSE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.background = element_rect(fill = "black"),
+      strip.background = element_blank()) +
+  facet_wrap(vars(Factor), ncol = 1) +
+  labs(y = "Height [m]", x = "") -> shap_vpts
+
+data_plot_envir %>%
+  filter(year == 2022) %>%
+  filter(lubridate::month(datetime) == 10) %>%
+  select(datetime, height, Height, `Boundary layer height`, `Cloud cover`, `Day of year`, Humidity, `Land-sea mask`, `Nr. of birds`, Precipitation, Pressure, Temperature, `Time of night`, Wind) %>%
+  group_by(datetime) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  pivot_longer(cols = -c(datetime, height), names_to = "Factor", values_to = "SHAP") %>%
+  filter(!Factor %in% c("Height", "Day of year", "Humidity", "Land-sea mask", "Pressure", "Cloud cover")) %>%
+  ggplot(aes(x = datetime, y = height, fill = SHAP)) +
+  geom_tile() +
+  scale_fill_continuous_diverging(palette = "Berlin", mid = 0, p1 = 1, p2 = 1, l1 = 70, na.value = 0) + 
+  scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) format(as.POSIXct(sub(" UTC$", "", x), tz = "UTC"), "%b %-d")) +
+  # dark_theme_gray() +
+  theme_classic(base_size = 14) +
+  coord_cartesian(expand = FALSE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.background = element_rect(fill = "black"),
+      strip.background = element_blank()) +
+  facet_wrap(vars(Factor), ncol = 1) +
+  labs(y = "Height [m]", x = "") -> shap_vpts_envir
+
+data_plot_label %>%
+  filter(year == 2022) %>%
+  filter(lubridate::month(datetime) == 10) %>%
+  group_by(datetime) %>%
+  mutate(datetime = as.factor(datetime)) %>%
+  select(contains(c("Precipitation", "Wind")), height, datetime, midnight) %>%
+  pivot_longer(cols = -c(datetime, height, midnight), names_to = "Factor", values_to = "SHAP") %>%
+  filter(Factor != "Height") %>%
+  mutate(Factor = fct_relevel(Factor, c("Stopover - Wind", "En-route - Wind", "Radar-level - Wind", "Stopover - Precipitation", "En-route - Precipitation"))) %>%
+  ggplot(aes(x = datetime, y = height, fill = SHAP)) +
+  geom_tile() +
+  scale_fill_continuous_diverging(palette = "Berlin", mid = 0, p1 = 1, p2 = 1, l1 = 70, na.value = 0) + 
+  scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) format(as.POSIXct(sub(" UTC$", "", x), tz = "UTC"), "%b %-d")) +
+  theme_classic(base_size = 14) +
+  facet_wrap(vars(Factor), ncol = 1) +
+  coord_cartesian(expand = FALSE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.background = element_rect(fill = "black"),
+      panel.spacing = unit(0, "lines"),
+      strip.background = element_blank()) +
+  labs(y = "Height [m]", x = "") -> shap_vpts_labels
+
+# vpts_truth / vpts_pred / shap_vpts
+vpts_truth / shap_vpts + plot_layout(heights = c(1.5, 3))
+
+ggsave("plots/temp/shap_vpts_locations.png", width = 15, height = 10)
+
+vpts_truth / shap_vpts_envir + plot_layout(heights = c(1.5, 3))
+
+ggsave("plots/temp/shap_vpts_envir.png", width = 15, height = 10)
+
+vpts_truth / shap_vpts_labels + plot_layout(heights = c(1.5, 3))
+
+ggsave("plots/temp/shap_vpts_labels.png", width = 15, height = 10)
+
+```
+
+
+
