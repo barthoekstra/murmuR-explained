@@ -15,6 +15,7 @@ library(tictoc)
 library(iml)
 library(patchwork)
 library(colorspace)
+library(shapviz)
 ```
 
 # Preparing the data for model training
@@ -22,64 +23,415 @@ library(colorspace)
 ```{r}
 source("R/functions_training.R")
 
-radar <- "nlhrw"
-season <- "autumn"
+train_model <- function(radar, season, year_held_out = NULL) {
+  task <- create_task(radar, season = season)
+  
+  selected_features_file <- sprintf("data/raw/model_features/fs_selected_top_features_%s_%s_dynamic.RDS", radar, season)
+  train_features <- readRDS(selected_features_file)
+  task$select(train_features)
+  
+  learner <- lrn("regr.lightgbm", 
+                 objective = "tweedie",
+                 verbose = 2,
+                 num_threads = 10)
+  best_params <- readRDS(sprintf("data/raw/model_params/fs_twdie_%s_%s_dynamic_regr.rmse_best_params_regr.rmse.RDS", radar,
+                                 season))
+  best_params$num_threads <- parallel::detectCores()-1
+  learner$param_set$values <- best_params
+  
+  if (!is.null(year_held_out)) {
+    tic(paste0("Training model for ", radar, " ", season, " ", year_held_out))
+    row_ids <- which(task$groups$group != year_held_out)
+    learner$train(task, row_ids = row_ids)
+    toc()
+    return(list(learner = learner, task = task, year_held_out = year_held_out, 
+                row_ids = row_ids))
+  } else {
+    tic(paste0("Training model for ", radar, " ", season))
+    learner$train(task)
+    toc()
+    return(list(learner = learner, task = task))
+  }
+}
 
-task <- create_task(radar, season = season)
-selected_features_file <- sprintf("data/raw/model_features/fs_selected_top_features_%s_%s_dynamic.RDS", radar, season)
-train_features <- readRDS(selected_features_file)
-task$select(train_features)
-
-learner <- lrn("regr.lightgbm", 
-               objective = "tweedie",
-               verbose = 2,
-               num_threads = 10)
-
-best_params <- readRDS(sprintf("data/raw/model_params/fs_twdie_%s_%s_dynamic_regr.rmse_best_params_regr.rmse.RDS", radar,
-                               season))
-best_params$num_threads <- parallel::detectCores()-1
-learner$param_set$values <- best_params
-
-set.seed(42)
-cv <- rsmp("cv", folds = 8)
-cv$instantiate(task)
-
-tic(paste0("Training model for ", radar, " ", season))
-learner$train(task, row_ids = cv$train_set(1))
-toc()
-
-# features in test data
-credit_x = tsk_german$data(rows = split$test,
-  cols = tsk_german$feature_names)
-# target in test data
-credit_y = tsk_german$data(rows = split$test,
-  cols = tsk_german$target_names)
-
-data_x <- task$data(rows = cv$test_set(1),
-                    cols = task$feature_names)
-data_y <- task$data(rows = cv$test_set(1),
-                    cols = task$target_names)
-
-predictor <- Predictor$new(learner, data = data_x, y = data_y)
-
-data_df <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
-  filter(period_rank_mtr %in% 6:10) %>%
-  select(-c(period_rank_mtr))
-data_tr <- task$data(rows = cv$test_set(1), cols = c(task$target_names, "period_rank_mtr")) %>%
-  filter(period_rank_mtr %in% 6:10) %>%
-  pull(dens)
-
-data_expl <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
-  filter(period_rank_mtr == 1:5) %>%
-  select(-c(period_rank_mtr))
-
-predictor <- Predictor$new(learner, data = data_df, y = data_tr)
-
-shapley = Shapley$new(predictor, x.interest = as.data.frame(data_expl)[2, ],
-  sample.size = 100)
-shapley$plot()
-
+model_autumn <- train_model("nlhrw", "autumn")
+model_spring <- train_model("nlhrw", "spring")
 ```
+
+```{r}
+additional_cols <- c("year", "datetime", "period_rank_mtr", "night_num", "mt")
+
+# data_autumn <- create_task("nlhrw", "autumn")
+selected_features_autumn <- sprintf("data/raw/model_features/fs_selected_top_features_%s_%s_dynamic.RDS", "nlhrw", "autumn")
+selected_features_spring <- sprintf("data/raw/model_features/fs_selected_top_features_%s_%s_dynamic.RDS", "nlhrw", "spring")
+train_features_autumn <- readRDS(selected_features_autumn)
+train_features_spring <- readRDS(selected_features_spring)
+
+data_autumn <- create_task("nlhrw", "autumn")$data(cols = c(train_features_autumn, additional_cols)) %>%
+  mutate(row_id = row_number())
+
+data_spring <- create_task("nlhrw", "spring")$data(cols = c(train_features_spring, additional_cols)) %>%
+      mutate(row_id = row_number())
+
+for (year_held_out in 2017:2024) {
+    print(paste0("Year held out: ", year_held_out))
+    
+    tic("Calculating autumn SHAP values")
+    model_autumn <- train_model("nlhrw", "autumn", year_held_out = year_held_out)
+    sv_autumn <- shapviz(model_autumn$learner$model, 
+                         data_autumn %>% select(all_of(model_autumn$task$feature_names)) %>% as.matrix())
+    toc()
+    saveRDS(sv_autumn, file = paste0("data/processed/sv_autumn_", year_held_out, ".RDS"))
+    
+    tic("Calculating spring SHAP values")
+    model_spring <- train_model("nlhrw", "spring", year_held_out = year_held_out)
+    sv_spring <- shapviz(model_spring$learner$model, 
+                         data_spring %>% select(all_of(model_spring$task$feature_names)) %>% as.matrix())
+    toc()
+    saveRDS(sv_spring, file = paste0("data/processed/sv_spring_", year_held_out, ".RDS"))
+}
+```
+
+
+```{r}
+additional_cols <- c("year", "datetime", "period_rank_mtr", "night_num", "mt")
+
+data_autumn <- model_autumn$task$data(cols = c(additional_cols, model_autumn$task$feature_names)) %>%
+  mutate(row_id = row_number())
+data_spring <- model_spring$task$data(cols = c(additional_cols, model_spring$task$feature_names)) %>%
+  mutate(row_id = row_number())
+
+tic("Calculating autumn SHAP values")
+sv_autumn <- shapviz(model_autumn$learner$model, data_autumn %>% select(model_autumn$task$feature_names) %>% as.matrix())
+# sv_autumn$S <- cbind(sv_autumn$S, row_id = 1:nrow(sv_autumn$S))
+toc()
+saveRDS(sv_autumn, file = "data/processed/sv_autumn.RDS")
+tic("Calculating spring SHAP values")
+sv_spring <- shapviz(model_spring$learner$model, data_spring %>% select(model_spring$task$feature_names) %>% as.matrix())
+# sv_spring$S <- cbind(sv_spring$S, row_id = 1:nrow(sv_spring$S))
+toc()
+saveRDS(sv_spring, file = "data/processed/sv_spring.RDS")
+```
+
+```{r}
+preds_autumn <- model_autumn$learner$predict(model_autumn$task)
+preds_spring <- model_spring$learner$predict(model_spring$task)
+
+data_autumn$truth <- preds_autumn$truth
+data_autumn$pred <- preds_autumn$response
+
+data_spring$truth <- preds_spring$truth
+data_spring$pred <- preds_spring$response
+```
+
+```{r}
+yyyy <- 2017:2024
+complete_spring <- lapply(yyyy, function(y) seq(from = as.POSIXct(paste0(y, "-02-01"), tz = "UTC"), to = as.POSIXct(paste0(y, "-05-31"), tz = "UTC"), by = "1 hour"))
+complete_spring <- as.POSIXct(unlist(complete_spring))
+hrw <- getRad::get_weather_radars() %>% as.data.frame() %>% filter(radar == "nlhrw")
+complete_nights <- bioRad::check_night(complete_spring, lon = hrw$longitude, lat = hrw$latitude)
+complete_nights <- complete_spring[complete_nights]
+
+complete_altitudes <- seq(from = 50, to = 3000, by = 50)
+
+complete_spring <- expand.grid(datetime = complete_nights, height = complete_altitudes)
+
+complete_spring %>%
+  left_join(data_spring, by = join_by(datetime, height)) %>%
+  mutate(year = lubridate::year(datetime)) %>%
+  identity() -> data_spring
+```
+
+
+```{r}
+data_spring %>%
+  filter(hour(datetime) == 0, minute(datetime) == 0) %>%
+  filter(year == 2022) %>%
+  distinct(datetime) %>%
+  pull(datetime) %>%
+  as.character() -> midnight_breaks
+
+data_spring %>%
+  filter(year == 2022) %>%
+  mutate(datetime_posix = datetime,
+        datetime = as.factor(datetime),
+        peak_night = case_when(
+          period_rank_mtr %in% 1:10 ~ "Top night",
+          period_rank_mtr %in% 11:20 ~ "Good night",
+          .default = NA
+        )) %>%
+  ggplot(aes(x = datetime)) +
+  geom_tile(aes(y = height, fill = truth)) +
+  # geom_point(aes(y = (rdr_r_poly1 > 75) * 500, color = (rdr_r_poly1 > 75) * 500)) +
+  geom_point(aes(y = rdr_blh), color = "white") +
+  # geom_point(aes(color = peak_night), y = -100, shape = "|", size = 6, position = position_nudge(x = 2)) + # Nudge position to align with ticks
+  scale_fill_viridis_c(trans = "sqrt", option = "magma",  na.value = "white", name = "Bird dens.") +
+  # scale_color_manual(values = c("Good night" = "#ff7f00", "Top night" = "#e31a1c"),
+  #                  labels = c("Good night" = "Good night", "Top night" = "Top night"),
+  #                  breaks = c("Good night", "Top night"),
+  #                  name = "Peak night", na.value = "#00000000") +
+  scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) {
+                     dt <- as.POSIXct(sub(" UTC$", "", x), tz = "UTC")
+                     labels <- lapply(dt, function(y) {
+                       if (mday(y) %% 2 == 0) {
+                         format(y, "%b %-d")
+                       } else {
+                         ""
+                       }
+                     })
+                     labels
+                   },
+                   position = "top") +
+  theme_classic(base_size = 14) +
+  coord_cartesian(expand = FALSE, ylim = c(-75, 3000), ) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 1, vjust = -1),
+        axis.title.x = element_blank(),
+        panel.background = element_rect(fill = "black"),) +
+  labs(y = "Height [m]") +
+  facet_wrap(vars(month(datetime_posix)), ncol = 1, scales = "free_x", strip.position = "right")
+```
+
+```{r}
+data_spring %>%
+  filter(!is.na(row_id)) -> data_spring_shap
+
+data_autumn %>%
+  filter(!is.na(row_id)) -> data_autumn_shap
+
+worst_nights_spring <- (max(data_spring_shap$period_rank_mtr)-10):max(data_spring_shap$period_rank_mtr)
+worst_nights_autumn <- (max(data_autumn_shap$period_rank_mtr)-10):max(data_autumn_shap$period_rank_mtr)
+
+top_nights_spring_shap <- sv_spring[data_spring_shap$period_rank_mtr <= 10, ]
+good_nights_spring_shap <- sv_spring[data_spring_shap$period_rank_mtr > 10 & data_spring_shap$period_rank_mtr <= 20, ]
+worst_nights_spring_shap <- sv_spring[data_spring_shap$period_rank_mtr %in% worst_nights_spring, ]
+
+top_nights_autumn_shap <- sv_autumn[data_autumn_shap$period_rank_mtr <= 10, ]
+good_nights_autumn_shap <- sv_autumn[data_autumn_shap$period_rank_mtr > 10 & data_autumn_shap$period_rank_mtr <= 20, ]
+worst_nights_autumn_shap <- sv_autumn[data_autumn_shap$period_rank_mtr %in% worst_nights_autumn, ]
+
+sv_importance(top_nights_spring_shap, kind = "beeswarm") + ggtitle("Top nights spring")
+sv_importance(good_nights_spring_shap, kind = "beeswarm") + ggtitle("Good nights spring")
+sv_importance(worst_nights_spring_shap, kind = "beeswarm") + ggtitle("Worst nights spring")
+sv_importance(top_nights_autumn_shap, kind = "beeswarm") + ggtitle("Top nights autumn")
+sv_importance(good_nights_autumn_shap, kind = "beeswarm") + ggtitle("Good nights autumn")
+sv_importance(worst_nights_autumn_shap, kind = "beeswarm") + ggtitle("Worst nights autumn")
+```
+
+```{r}
+vars <- c(colnames(sv_spring), colnames(sv_autumn))
+
+classify_var_location <- function(v) {
+  if (str_detect(v, "rdr_")) return("Radar-level")
+  if (str_detect(v, "fl_")) return("En-route")
+  if (str_detect(v, "stp_")) return("Stopover")
+  if (v %in% c("yday", "solar_elev", "solar_azim", "solar_elevation_change")) return("Phenology")
+  if (v == "height") return("Height")
+  if (v == "nr_birds") return("Radar-level")
+}
+
+classify_var_envir <- function(v) {
+  if (str_detect(v, "_u|_v")) return("Wind")
+  if (str_detect(v, "_t|_t2m")) return("Temperature")
+  if (str_detect(v, "_lsrr|_crr")) return("Precipitation")
+  if (str_detect(v, "_msl")) return("Pressure")
+  if (str_detect(v, "_blh")) return("Boundary layer height")
+  if (str_detect(v, "_cc|_lcc|_mcc|_hcc|_cbh")) return("Cloud cover")
+  if (str_detect(v, "_r|_q")) return("Humidity")
+  if (str_detect(v, "_lsm")) return("Land-sea mask")
+  if (v == "height") return("Height")
+  if (v == "yday") return("Day of year")
+  if (str_detect(v, "solar_")) return("Time of night")
+  if (str_detect(v, "_lat|_lon")) return("Take-off location")
+  if (v == "nr_birds") return("Nr. of birds")
+}
+
+var_locations <- vapply(vars, classify_var_location, character(1))
+var_envir <- vapply(vars, classify_var_envir, character(1))
+
+var_combined <- paste(var_locations, var_envir)
+
+collapse_locations <- split(vars, var_locations)
+collapse_locations <- lapply(collapse_locations, unique)
+
+collapse_envir <- split(vars, var_envir)
+collapse_envir <- lapply(collapse_envir, unique)
+
+spring_collapsed_locations <- collapse_shap(sv_spring$S, collapse_locations)
+autumn_collapsed_locations <- collapse_shap(sv_autumn$S, collapse_locations)
+
+spring_collapsed_envir <- collapse_shap(sv_spring$S, collapse_envir)
+autumn_collapsed_envir <- collapse_shap(sv_autumn$S, collapse_envir)
+
+merged_shap_data_spring <- left_join(sv_spring$X, data_spring_shap)
+merged_shap_data_autumn <- left_join(sv_autumn$X, data_autumn_shap)
+
+spring_collapsed_locations %>%
+  as.data.frame() %>%
+  bind_cols(merged_shap_data_spring) %>%
+  mutate(season = "Spring") %>%
+  identity() -> spring_shap_locations
+
+autumn_collapsed_locations %>%
+  as.data.frame() %>%
+  bind_cols(merged_shap_data_autumn) %>%
+  mutate(season = "Autumn") %>%
+  identity() -> autumn_shap_locations
+
+spring_collapsed_envir %>%
+  as.data.frame() %>%
+  bind_cols(merged_shap_data_spring) %>%
+  mutate(season = "Spring") %>%
+  identity() -> spring_shap_envir
+
+autumn_collapsed_envir %>%
+  as.data.frame() %>%
+  bind_cols(merged_shap_data_autumn) %>%
+  mutate(season = "Autumn") %>%
+  identity() -> autumn_shap_envir
+
+bind_rows(spring_shap_locations, autumn_shap_locations) %>%
+  pivot_longer(cols = `En-route`:`Stopover`, names_to = "location", values_to = "SHAP") %>%
+  filter(!location == "Height") %>%
+  identity() -> location_shap
+
+bind_rows(spring_shap_envir, autumn_shap_envir) %>%
+  pivot_longer(cols = `Boundary layer height`:`Wind`, names_to = "envir", values_to = "SHAP") %>%
+  filter(!envir == "Height") %>%
+  identity() -> envir_shap
+
+
+# The plots below are the story!
+ggplot() +
+  geom_point(aes(x = period_rank_mtr, y = SHAP, color = season), 
+             data = location_shap %>% group_by(season, location) %>% slice_sample(n = 5000),
+             alpha = 0.05) +
+  geom_smooth(aes(x = period_rank_mtr, y = SHAP, color = season), data = location_shap %>% group_by(season, location) %>% slice_sample(n = 50000)) +
+  facet_wrap(vars(location), scales = "free_y") +
+  scale_x_reverse() +
+  labs(x = "Night rank", y = "Summed SHAP")
+
+ggplot() +
+  geom_point(aes(x = period_rank_mtr, y = SHAP, color = season), 
+             data = envir_shap %>% group_by(season, envir) %>% slice_sample(n = 5000),
+             alpha = 0.05) +
+  geom_smooth(aes(x = period_rank_mtr, y = SHAP, color = season), data = envir_shap %>% group_by(season, envir) %>% slice_sample(n = 10000)) +
+  facet_wrap(vars(envir), scales = "free_y") +
+  scale_x_reverse() +
+  labs(x = "Night rank", y = "Summed SHAP")
+# The plots above are the story!
+
+ggplot() +
+  geom_point(aes(x = yday, y = SHAP, color = season), 
+             data = location_shap %>% group_by(season, location) %>% slice_sample(n = 5000),
+             alpha = 0.05) +
+  geom_smooth(aes(x = yday, y = SHAP, color = season), data = location_shap %>% group_by(season, location) %>% slice_sample(n = 50000)) +
+  facet_wrap(vars(location), scales = "free_y") +
+  labs(x = "Day of year", y = "Summed SHAP")
+
+ggplot() +
+  geom_point(aes(x = yday, y = SHAP, color = season), 
+             data = envir_shap %>% group_by(season, envir) %>% slice_sample(n = 5000),
+             alpha = 0.05) +
+  geom_smooth(aes(x = yday, y = SHAP, color = season), data = envir_shap %>% group_by(season, envir) %>% slice_sample(n = 10000)) +
+  facet_wrap(vars(envir), scales = "free_y") +
+  labs(x = "Day of year", y = "Summed SHAP")
+```
+
+
+```{r}
+vars <- colnames(sv_autumn)
+
+classify_var_location <- function(v) {
+  if (str_detect(v, "rdr_")) return("Radar-level")
+  if (str_detect(v, "fl_")) return("En-route")
+  if (str_detect(v, "stp_")) return("Stopover")
+  if (v %in% c("yday", "solar_elev", "solar_azim", "solar_elevation_change")) return("Phenology")
+  if (v == "height") return("Height")
+  if (v == "nr_birds") return("Radar-level")
+}
+
+classify_var_envir <- function(v) {
+  if (str_detect(v, "_u|_v")) return("Wind")
+  if (str_detect(v, "_t|_t2m")) return("Temperature")
+  if (str_detect(v, "_lsrr|_crr")) return("Precipitation")
+  if (str_detect(v, "_msl")) return("Pressure")
+  if (str_detect(v, "_blh")) return("Boundary layer height")
+  if (str_detect(v, "_cc|_lcc|_mcc|_hcc|_cbh")) return("Cloud cover")
+  if (str_detect(v, "_r|_q")) return("Humidity")
+  if (str_detect(v, "_lsm")) return("Land-sea mask")
+  if (v == "height") return("Height")
+  if (v == "yday") return("Day of year")
+  if (str_detect(v, "solar_")) return("Time of night")
+  if (str_detect(v, "_lat|_lon")) return("Take-off location")
+  if (v == "nr_birds") return("Nr. of birds")
+}
+
+var_locations <- vapply(vars, classify_var_location, character(1))
+var_envir <- vapply(vars, classify_var_envir, character(1))
+
+var_combined <- paste(var_locations, var_envir)
+
+collapse <- split(vars, var_combined)
+
+S_collapsed <- collapse_shap(sv_autumn$S, collapse)
+
+merged_shap_data <- left_join(sv_autumn$X, data_autumn_shap)
+
+S_collapsed %>%
+  as.data.frame() %>%
+  bind_cols(merged_shap_data) %>%
+  identity() -> z
+
+z %>%
+  pivot_longer(cols = `En-route Boundary layer height`:`Stopover Wind`, names_to = "Variable", values_to = "SHAP") %>%
+  group_by(Variable) %>%
+  slice_sample(n = 10000) %>%
+  ggplot(aes(x = period_rank_mtr, y = SHAP, color = yday)) +
+  geom_point() + 
+  geom_smooth(color = "blue") +
+  scale_color_viridis_c(option = "magma") +
+  facet_wrap(vars(Variable), scales = "free_y")
+```
+
+
+
+
+
+```{r}
+complete_combo %>%
+  left_join(data_spring, by = join_by(datetime, height, year)) %>%
+  filter(year == 2020) %>%
+  mutate(datetime_posix = datetime,
+        datetime = as.factor(datetime)) %>%
+  ggplot(aes(x = datetime)) +
+  geom_tile(aes(y = height, fill = pred)) +
+  scale_fill_viridis_c(trans = "sqrt", option = "magma",  na.value = "white", name = "Bird dens.") +
+  scale_x_discrete(breaks = midnight_breaks,
+                   label = function(x) {
+                     dt <- as.POSIXct(sub(" UTC$", "", x), tz = "UTC")
+                     labels <- lapply(dt, function(y) {
+                       if (mday(y) %% 2 == 0) {
+                         format(y, "%b %-d")
+                       } else {
+                         ""
+                       }
+                     })
+                     labels
+                   },
+                   position = "top") +
+  theme_classic(base_size = 14) +
+  coord_cartesian(expand = FALSE) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 1, vjust = -1),
+        axis.title.x = element_blank(),
+        panel.background = element_rect(fill = "black"),) +
+  labs(y = "Height [m]") +
+  facet_wrap(vars(month(datetime_posix)), ncol = 1, scales = "free_x", strip.position = "right") -> pred
+
+truth
+```
+
+
 
 ```{r}
 data_goodnights <- task$data(rows = cv$test_set(1), cols = c(task$feature_names, "period_rank_mtr")) %>%
@@ -196,6 +548,9 @@ var_data %>%
 
 
 ```{r}
+
+yearmonths <- expand.grid(year = c(2017:2024), month = c(8:11)) %>% purrr::transpose()
+
 vars <- colnames(sva)
 
 classify_var <- function(v) {
@@ -254,16 +609,18 @@ data_plot_label <- task$data(cols = c("height", "period_rank_mtr", "year", "date
   bind_cols(S_collapsed_label) %>%
   bind_cols(truth = task$truth(), pred = pred)
 
-midnight_breaks <- data_plot_label %>%
-  filter(year == 2022, month(datetime) == 10) %>%
+for (yearmonth in yearmonths) {
+  midnight_breaks <- data_plot_label %>%
+  filter(year == yearmonth$year) %>%
+  # filter(month(datetime) == yearmonth$month) %>%
   filter(hour(datetime) == 0, minute(datetime) == 0) %>%
   distinct(datetime) %>%
   pull(datetime) %>%
   as.character()
 
 data_plot %>%
-  filter(year == 2022) %>%
-  filter(lubridate::month(datetime) == 10) %>%
+  filter(year == yearmonth$year) %>%
+  # filter(lubridate::month(datetime) == yearmonth$month) %>%
   mutate(datetime = as.factor(datetime)) %>%
   ggplot(aes(x = datetime)) +
   geom_tile(aes(y = height, fill = truth)) +
@@ -278,33 +635,27 @@ data_plot %>%
         axis.title.x = element_blank(),
         panel.background = element_rect(fill = "black"),) +
   labs(y = "Height [m]")-> vpts_truth
+# 
+# data_plot %>%
+#   complete(datetime = seq(from = min(data_plot$datetime), to = max(data_plot$datetime), by = "1 hour")) %>%
+#   filter(year == 2022) %>%
+#   filter(lubridate::month(datetime) == 10) -> z
+
+# data_plot %>%
+#   filter(year == 2022) %>%
+#   filter(lubridate::month(datetime) == 10) %>%
+#   mutate(datetime = as.factor(datetime)) %>%
+#   ggplot(aes(x = datetime)) +
+#   geom_raster(aes(y = height, fill = pred)) +
+#   scale_fill_viridis_c(option = "inferno", trans = "sqrt") +
+#   dark_theme_gray() +
+#   theme(axis.ticks.x = element_blank(),
+#         axis.text.x = element_blank(),
+#         axis.title.x = element_blank()) -> vpts_pred
 
 data_plot %>%
-  filter(year == 2022) %>%
-  filter(lubridate::month(datetime) == 10) %>%
-  mutate(datetime = as.factor(datetime)) %>%
-  ggplot(aes(x = datetime)) +
-  geom_raster(aes(y = height, fill = pred)) +
-  scale_fill_viridis_c(option = "inferno", trans = "sqrt") +
-  dark_theme_gray() +
-  theme(axis.ticks.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.x = element_blank()) -> vpts_pred
-
-data_plot %>%
-  filter(year == 2022) %>%
-  mutate(datetime = as.factor(datetime)) %>%
-  ggplot(aes(x = datetime)) +
-  geom_raster(aes(y = height, fill = `En-route`)) +
-  scale_fill_continuous_divergingx(palette = 'RdBu', mid = 0) + 
-  dark_theme_gray() +
-  theme(axis.ticks.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.x = element_blank())
-
-data_plot %>%
-  filter(year == 2022) %>%
-  filter(lubridate::month(datetime) == 10) %>%
+  filter(year == yearmonth$year) %>%
+  # filter(lubridate::month(datetime) == yearmonth$month) %>%
   select(datetime, height, Height, `En-route`, Stopover, `Radar-level`, Phenology) %>%
   group_by(datetime) %>%
   mutate(datetime = as.factor(datetime)) %>%
@@ -326,8 +677,8 @@ data_plot %>%
   labs(y = "Height [m]", x = "") -> shap_vpts
 
 data_plot_envir %>%
-  filter(year == 2022) %>%
-  filter(lubridate::month(datetime) == 10) %>%
+  filter(year == yearmonth$year) %>%
+  # filter(lubridate::month(datetime) == yearmonth$month) %>%
   select(datetime, height, Height, `Boundary layer height`, `Cloud cover`, `Day of year`, Humidity, `Land-sea mask`, `Nr. of birds`, Precipitation, Pressure, Temperature, `Time of night`, Wind) %>%
   group_by(datetime) %>%
   mutate(datetime = as.factor(datetime)) %>%
@@ -348,12 +699,12 @@ data_plot_envir %>%
   labs(y = "Height [m]", x = "") -> shap_vpts_envir
 
 data_plot_label %>%
-  filter(year == 2022) %>%
-  filter(lubridate::month(datetime) == 10) %>%
+  filter(year == yearmonth$year) %>%
+  # filter(lubridate::month(datetime) == yearmonth$month) %>%
   group_by(datetime) %>%
   mutate(datetime = as.factor(datetime)) %>%
-  select(contains(c("Precipitation", "Wind")), height, datetime, midnight) %>%
-  pivot_longer(cols = -c(datetime, height, midnight), names_to = "Factor", values_to = "SHAP") %>%
+  select(contains(c("Precipitation", "Wind")), height, datetime) %>%
+  pivot_longer(cols = -c(datetime, height), names_to = "Factor", values_to = "SHAP") %>%
   filter(Factor != "Height") %>%
   mutate(Factor = fct_relevel(Factor, c("Stopover - Wind", "En-route - Wind", "Radar-level - Wind", "Stopover - Precipitation", "En-route - Precipitation"))) %>%
   ggplot(aes(x = datetime, y = height, fill = SHAP)) +
@@ -373,16 +724,21 @@ data_plot_label %>%
 # vpts_truth / vpts_pred / shap_vpts
 vpts_truth / shap_vpts + plot_layout(heights = c(1.5, 3))
 
-ggsave("plots/temp/shap_vpts_locations.png", width = 15, height = 10)
+yearmonth$month <- 13
+
+ggsave(sprintf("plots/temp/shap_vpts_locations_%d_%d.png", yearmonth$year, yearmonth$month), 
+       width = 15, height = 10)
 
 vpts_truth / shap_vpts_envir + plot_layout(heights = c(1.5, 3))
 
-ggsave("plots/temp/shap_vpts_envir.png", width = 15, height = 10)
+ggsave(sprintf("plots/temp/shap_vpts_envir_%d_%d.png", yearmonth$year, yearmonth$month), 
+       width = 15, height = 10)
 
 vpts_truth / shap_vpts_labels + plot_layout(heights = c(1.5, 3))
 
-ggsave("plots/temp/shap_vpts_labels.png", width = 15, height = 10)
-
+ggsave(sprintf("plots/temp/shap_vpts_labels_%d_%d.png", yearmonth$year, yearmonth$month),
+       width = 15, height = 10)
+}
 ```
 
 
