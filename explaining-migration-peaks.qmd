@@ -16,6 +16,8 @@ library(iml)
 library(patchwork)
 library(colorspace)
 library(shapviz)
+library(khroma)
+library(ggh4x)
 ```
 
 # Preparing the data for model training
@@ -53,6 +55,12 @@ train_model <- function(radar, season, year_held_out = NULL) {
     return(list(learner = learner, task = task))
   }
 }
+
+spring_task <- create_task("nlhrw", "spring")
+autumn_task <- create_task("nlhrw", "autumn")
+
+spring_data <- spring_task$data(cols = spring_task$col_info$id)
+autumn_data <- autumn_task$data(cols = autumn_task$col_info$id)
 
 model_autumn <- train_model("nlhrw", "autumn")
 model_spring <- train_model("nlhrw", "spring")
@@ -93,25 +101,398 @@ for (year_held_out in 2017:2024) {
 ```
 
 
+
 ```{r}
-additional_cols <- c("year", "datetime", "period_rank_mtr", "night_num", "mt")
+spring_files <- Sys.glob("data/processed/sv_spring_*.RDS")
+sv_spring_years <- lapply(spring_files, readRDS)
 
-data_autumn <- model_autumn$task$data(cols = c(additional_cols, model_autumn$task$feature_names)) %>%
-  mutate(row_id = row_number())
-data_spring <- model_spring$task$data(cols = c(additional_cols, model_spring$task$feature_names)) %>%
-  mutate(row_id = row_number())
+autumn_files <- Sys.glob("data/processed/sv_autumn_*.RDS")
+sv_autumn_years <- lapply(autumn_files, readRDS)
 
-tic("Calculating autumn SHAP values")
-sv_autumn <- shapviz(model_autumn$learner$model, data_autumn %>% select(model_autumn$task$feature_names) %>% as.matrix())
-# sv_autumn$S <- cbind(sv_autumn$S, row_id = 1:nrow(sv_autumn$S))
-toc()
-saveRDS(sv_autumn, file = "data/processed/sv_autumn.RDS")
-tic("Calculating spring SHAP values")
-sv_spring <- shapviz(model_spring$learner$model, data_spring %>% select(model_spring$task$feature_names) %>% as.matrix())
-# sv_spring$S <- cbind(sv_spring$S, row_id = 1:nrow(sv_spring$S))
-toc()
-saveRDS(sv_spring, file = "data/processed/sv_spring.RDS")
+years <- 2017:2024
+
+sv_list_to_dataframe <- function(sv_list, season, years) {
+  sv_importances <- lapply(sv_list, sv_importance, kind = "no")
+  sv_importances_df <- lapply(seq_along(sv_list), function(i) {
+    df <- data.frame(mean_abs_shap = sv_importances[[i]]) %>% rownames_to_column(var = "variable")
+    df$year_held_out <- years[[i]]
+    df
+  })
+  sv_importances_df <- bind_rows(sv_importances_df)
+  sv_importances_df$season <- season
+  sv_importances_df
+}
+
+sv_spring <- sv_list_to_dataframe(sv_spring_years, "spring", 2017:2024)
+sv_autumn <- sv_list_to_dataframe(sv_autumn_years, "autumn", 2017:2024)
+
+ggplot(sv_spring, aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
+  geom_point() +
+  labs(x = "Mean absolute SHAP value", y = "Variable")
+
+ggplot(sv_autumn, aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
+  geom_point() +
+  labs(x = "Mean absolute SHAP value", y = "Variable")
 ```
+
+```{r}
+vars <- c(colnames(sv_spring_years[[1]]), colnames(sv_autumn_years[[1]]))
+
+classify_var_location <- function(v) {
+  if (str_detect(v, "rdr_")) return("Radar-level")
+  if (str_detect(v, "fl_")) return("En-route")
+  if (str_detect(v, "stp_")) return("Stopover")
+  if (v %in% c("yday", "solar_elev", "solar_azim", "solar_elevation_change")) return("Phenology")
+  if (v == "height") return("Height")
+  if (v == "nr_birds") return("Radar-level")
+}
+
+classify_var_envir <- function(v) {
+  if (str_detect(v, "_u|_v")) return("Wind")
+  if (str_detect(v, "_t|_t2m")) return("Temperature")
+  if (str_detect(v, "_lsrr|_crr")) return("Precipitation")
+  if (str_detect(v, "_msl")) return("Pressure")
+  if (str_detect(v, "_blh")) return("Boundary layer height")
+  if (str_detect(v, "_cc|_lcc|_mcc|_hcc|_cbh")) return("Cloud cover")
+  if (str_detect(v, "_r|_q")) return("Humidity")
+  if (str_detect(v, "_lsm")) return("Land-sea mask")
+  if (v == "height") return("Height")
+  if (v == "yday") return("Day of year")
+  if (str_detect(v, "solar_")) return("Time of night")
+  if (str_detect(v, "_lat|_lon")) return("Take-off location")
+  if (v == "nr_birds") return("Nr. of birds")
+}
+
+sv_list_collapsed_to_dataframe <- function(sv_list_collapsed, season, years) {
+  sv_list_collapsed <- lapply(seq_along(sv_list_collapsed), function(i) {
+    sv_listitem_collapsed_df <- as.data.frame(sv_list_collapsed[[i]])
+    sv_listitem_collapsed_df$year_held_out <- years[[i]]
+    sv_listitem_collapsed_df
+  })
+  sv_list_collapsed <- bind_rows(sv_list_collapsed)
+  sv_list_collapsed$season <- season
+  sv_list_collapsed
+}
+
+collapse_adjusted <- function(S, collapse_vars) {
+  vars_present <- colnames(S)
+
+  collapse_vars_filtered <- lapply(
+    collapse_vars,
+    function(x) x[x %in% vars_present]
+  )
+  
+  collapse_shap(S, collapse_vars_filtered)
+}
+
+var_locations <- vapply(vars, classify_var_location, character(1))
+var_envirs <- vapply(vars, classify_var_envir, character(1))
+
+collapse_locations <- split(vars, var_locations)
+collapse_locations <- lapply(collapse_locations, unique)
+
+collapse_envirs <- split(vars, var_envirs)
+collapse_envirs <- lapply(collapse_envirs, unique)
+
+var_combo <- paste(var_envirs, var_locations, sep = "/")
+collapse_combo <- split(vars, var_combo)
+collapse_combo <- lapply(collapse_combo, unique)
+
+sv_spring_years_locations <- lapply(sv_spring_years, function(x) collapse_adjusted(x$S, collapse_locations))
+sv_spring_years_locations_df <- sv_list_collapsed_to_dataframe(sv_spring_years_locations, "spring", 2017:2024) %>%
+  pivot_longer(cols = -c("year_held_out", "season"), names_to = "variable", values_to = "shap") %>%
+  group_by(year_held_out, season, variable) %>%
+  summarise(mean_abs_shap = mean(abs(shap)))
+
+sv_autumn_years_locations <- lapply(sv_autumn_years, function(x) collapse_adjusted(x$S, collapse_locations))
+sv_autumn_years_locations_df <- sv_list_collapsed_to_dataframe(sv_autumn_years_locations, "autumn", 2017:2024) %>%
+  pivot_longer(cols = -c("year_held_out", "season"), names_to = "variable", values_to = "shap") %>%
+  group_by(year_held_out, season, variable) %>%
+  summarise(mean_abs_shap = mean(abs(shap)))
+
+sv_spring_years_envirs <- lapply(sv_spring_years, function(x) collapse_adjusted(x$S, collapse_envirs))
+sv_autumn_years_envirs <- lapply(sv_autumn_years, function(x) collapse_adjusted(x$S, collapse_envirs))
+
+sv_spring_years_combo <- lapply(sv_spring_years, function(x) collapse_adjusted(x$S, collapse_combo))
+sv_autumn_years_combo <- lapply(sv_autumn_years, function(x) collapse_adjusted(x$S, collapse_combo))
+
+bind_rows(sv_autumn_years_locations_df, sv_spring_years_locations_df) %>%
+  ggplot(aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), group = season, color = year_held_out, shape = season)) +
+  geom_point(position = position_dodge(0.5)) +
+  labs(x = "Mean absolute SHAP value", y = "Variable class")
+```
+
+```{r}
+spring_ranks_and_datetimes <- select(spring_data, datetime, period_rank_mtr)
+autumn_ranks_and_datetimes <- select(autumn_data, datetime, period_rank_mtr)
+
+spring_locations <- sv_list_collapsed_to_dataframe(sv_spring_years_locations, "spring", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
+
+autumn_locations <- sv_list_collapsed_to_dataframe(sv_autumn_years_locations, "autumn", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(autumn_ranks_and_datetimes))))
+
+all_locations <- bind_rows(spring_locations, autumn_locations)
+
+all_locations %>%
+  pivot_longer(cols = c(`En-route`:Stopover), names_to = "location", values_to = "shap") %>%
+  group_by(year_held_out, season, location) %>%
+  slice_sample(n = 1000) %>%
+  ggplot(aes(x = period_rank_mtr, y = shap, color = season)) +
+  geom_point(alpha = 0.01) +
+  geom_smooth() +  # Can make smooth based on all points and just plot a few points
+  scale_x_reverse() +
+  facet_wrap(vars(location), scales = "free_y") +
+  labs(x = "Ranked night", y = "SHAP")
+
+all_locations %>%
+  pivot_longer(cols = c(`En-route`:Stopover), names_to = "location", values_to = "shap") %>%
+  mutate(datetime_noyear = update(datetime, year = 2000)) %>%
+  group_by(year_held_out, season, location) %>%
+  slice_sample(n = 1000) %>%
+  ggplot(aes(x = datetime_noyear, y = shap, color = season)) +
+  geom_point(alpha = 0.01) +
+  geom_smooth() +  # Can make smooth based on all points and just plot a few points
+  # scale_x_reverse() +
+  facet_wrap(vars(location), scales = "free_y") +
+  labs(x = "", y = "SHAP")
+```
+
+```{r}
+spring_ranks_and_datetimes <- select(spring_data, datetime, period_rank_mtr)
+autumn_ranks_and_datetimes <- select(autumn_data, datetime, period_rank_mtr)
+
+spring_envirs <- sv_list_collapsed_to_dataframe(sv_spring_years_envirs, "spring", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
+
+autumn_envirs <- sv_list_collapsed_to_dataframe(sv_autumn_years_envirs, "autumn", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(autumn_ranks_and_datetimes))))
+
+all_envirs <- bind_rows(spring_envirs, autumn_envirs)
+
+all_envirs %>%
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime), names_to = "envir", values_to = "shap") %>%
+  group_by(year_held_out, season, envir) %>%
+  slice_sample(n = 1000) %>%
+  ggplot(aes(x = period_rank_mtr, y = shap, color = season)) +
+  geom_point(alpha = 0.01) +
+  geom_smooth() +  # Can make smooth based on all points and just plot a few points
+  scale_x_reverse() +
+  facet_wrap(vars(envir), scales = "free_y") +
+  # facet_wrap(vars(envir)) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  labs(x = "Ranked night", y = "SHAP")
+
+all_envirs %>%
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime), names_to = "envir", values_to = "shap") %>%
+  mutate(datetime_noyear = update(datetime, year = 2000)) %>%
+  group_by(year_held_out, season, envir) %>%
+  slice_sample(n = 1000) %>%
+  ggplot(aes(x = datetime_noyear, y = shap, color = season)) +
+  geom_point(alpha = 0.01) +
+  geom_smooth() +  # Can make smooth based on all points and just plot a few points
+  # scale_x_reverse() +
+  facet_wrap(vars(envir), scales = "free_y") +
+  # facet_wrap(vars(envir)) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  labs(x = "", y = "SHAP")
+```
+
+```{r}
+spring_ranks_and_datetimes <- select(spring_data, datetime, period_rank_mtr, mtr) %>%
+  mutate(year = lubridate::year(datetime))
+spring_nightly_mt <- spring_ranks_and_datetimes %>%
+  distinct(datetime, .keep_all = TRUE) %>%
+  group_by(year, period_rank_mtr) %>%
+  summarise(nightly_mt = sum(mtr)) %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(nightly_mt_rank = rank(-nightly_mt, ties.method = "min"))
+spring_ranks_and_datetimes <- left_join(spring_ranks_and_datetimes, spring_nightly_mt)
+
+autumn_ranks_and_datetimes <- select(autumn_data, datetime, period_rank_mtr, mtr) %>%
+  mutate(year = lubridate::year(datetime))
+autumn_nightly_mt <- autumn_ranks_and_datetimes %>%
+  distinct(datetime, .keep_all = TRUE) %>%
+  group_by(year, period_rank_mtr) %>%
+  summarise(nightly_mt = sum(mtr)) %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(nightly_mt_rank = rank(-nightly_mt, ties.method = "min"))
+autumn_ranks_and_datetimes <- left_join(autumn_ranks_and_datetimes, autumn_nightly_mt)
+
+spring_combo <- sv_list_collapsed_to_dataframe(sv_spring_years_combo, "spring", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
+
+autumn_combo <- sv_list_collapsed_to_dataframe(sv_autumn_years_combo, "autumn", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(autumn_ranks_and_datetimes))))
+
+all_combo <- bind_rows(spring_combo, autumn_combo)
+
+lookup_table <- data.frame(original = colnames(all_combo),
+                           envir = unlist(lapply(colnames(all_combo), function(x) str_split(x, pattern = "/")[[1]][1])),
+                           location = unlist(lapply(colnames(all_combo), function(x) str_split(x, pattern = "/")[[1]][2]))) %>%
+  drop_na()
+
+all_combo %>%
+  data.table::as.data.table() %>%
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime, nightly_mt, nightly_mt_rank), 
+               names_to = "envir_combo", values_to = "shap") %>%
+  # separate_wider_delim(envir, delim = "/", names = c("envir", "location")) %>%
+  identity() -> all_combo_preprocessed
+
+all_combo_preprocessed <- left_join(all_combo_preprocessed, lookup_table, by = c("envir_combo" = "original")) %>%
+  mutate(year = lubridate::year(datetime)) %>%
+  as.data.table()
+
+all_combo_preprocessed %>%
+  filter(!envir %in% c("Height", "Day of year", "Nr. of birds", "Time of night", "Land-sea mask"),
+         year_held_out == 2017) %>%
+  # filter(envir == "Temperature") %>%
+  identity() -> all_combo_preprocessed2
+  
+  
+all_combo_preprocessed2 %>%
+  group_by(year, season, envir, location) %>%
+  slice_sample(n = 500) %>%
+  identity() %>%
+  # head()
+  ggplot(aes(x = period_rank_mtr, y = shap, color = location, group = interaction(year, location))) +
+  # geom_point(alpha = 0.01) +
+  geom_smooth() +
+  scale_x_reverse() +
+  facet_wrap(vars(envir, season), scales = "free_y") +
+  labs(x = "Ranked night", y = "SHAP")
+```
+
+
+```{r}
+all_combo_preprocessed %>%
+  filter(!envir %in% c("Height", "Day of year", "Nr. of birds", "Time of night", "Land-sea mask"),
+         year_held_out == 2017) %>%
+  # filter(envir == "Temperature") %>%
+  as.data.table() %>%
+  group_by(year, period_rank_mtr, envir, season, location, nightly_mt, nightly_mt_rank) %>%
+  summarise(mean_shap = mean(shap),
+            real_dt = min(datetime),
+            disp_dt = update(real_dt, year = 2000)) %>%
+  ungroup() %>%
+  mutate(season_human = str_to_sentence(season),
+         season_human = fct_relevel(as.factor(season_human), "Spring", "Autumn"),
+         location = fct_relevel(as.factor(location), "Radar-level", "En-route", "Stopover")) %>%
+  identity() -> all_combo_small
+
+cbrt_trans <- scales::trans_new(
+  name = "cbrt",
+  transform = function(x) sign(x) * abs(x)^(1/3),
+  inverse   = function(x) sign(x) * abs(x)^3
+)
+
+all_combo_small %>%
+  ggplot(aes(x = nightly_mt_rank, y = year, fill = nightly_mt)) +
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000)) +
+  geom_raster() + 
+  scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  ggh4x::facet_grid2(cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  labs(y = "Year", x = "") -> plot_mt_ranked
+
+all_combo_small %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  ggplot(aes(x = nightly_mt_rank, y = year)) +
+  geom_raster(aes(fill = mean_shap)) +
+  scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  khroma::scale_fill_vik(name = "Mean SHAP value") +
+  ggh4x::facet_grid2(rows = vars(envir, location), cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  labs(y = "Year", x = "") -> plot_envir_ranked
+
+plot_mt_ranked / plot_envir_ranked + plot_layout(heights = c(1, 8))
+```
+
+```{r}
+all_combo_small %>%
+  ggplot(aes(x = as.Date(disp_dt), y = year)) +
+  geom_raster(aes(fill = nightly_mt)) + 
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000)) +
+  # scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  facet_grid2(cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  labs(y = "Year", x = "") -> plot_mt_chronological
+
+all_combo_small %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  ggplot(aes(x = as.Date(disp_dt), y = year)) +
+  geom_raster(aes(fill = mean_shap)) +
+  scale_fill_vik() +
+  facet_grid2(rows = vars(envir, location), cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  labs(y = "Year", x = "") -> plot_envir_chronological
+
+plot_mt_chronological / plot_envir_chronological + plot_layout(heights = c(1, 8))
+```
+
+```{r}
+cbrt_trans <- scales::trans_new(
+  name = "cbrt",
+  transform = function(x) sign(x) * abs(x)^(1/3),
+  inverse   = function(x) sign(x) * abs(x)^3
+)
+
+all_combo_small %>%
+  ggplot(aes(x = period_rank_mtr, y = year, fill = nightly_mt)) +
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000)) +
+  geom_raster() + 
+  scale_x_reverse() +
+  facet_wrap(vars(season_human))
+```
+
+
+
+```{r}
+all_envirs %>%
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime), names_to = "envir", values_to = "shap") %>%
+  mutate(real_year = lubridate::year(datetime),
+         datetime_noyear = update(datetime, year = 2000)) -> all_envirs_plot_data
+
+all_envirs_plot_data %>%
+  group_by(year_held_out, season, envir) %>%
+  slice_sample(n = 5000) %>%
+  ggplot(aes(x = datetime_noyear, y = shap, group = interaction(real_year, season), color = real_year)) +
+  geom_smooth() +
+  facet_wrap(vars(envir), scales = "free_y") +
+  labs(x = "", y = "SHAP")
+
+all_envirs_plot_data %>%
+  group_by(year_held_out, season, envir) %>%
+  slice_sample(n = 500) %>%
+  ggplot(aes(x = datetime_noyear, y = shap, color = season)) +
+  # geom_point(alpha = 0.01) +
+  geom_smooth(aes(x = datetime_noyear, y = shap, color = year_held_out), method = lm, data = all_envirs_plot_data %>% group_by(year_held_out, season, envir) %>% slice_sample(n = 100)) +  # Can make smooth based on all points and just plot a few points
+  # scale_x_reverse() +
+  facet_wrap(vars(envir), scales = "free_y") +
+  labs(x = "", y = "SHAP")
+```
+
+
+
+```{r}
+var_combined <- paste(var_locations, var_envir)
+
+collapse_locations <- split(vars, var_locations)
+collapse_locations <- lapply(collapse_locations, unique)
+
+collapse_envir <- split(vars, var_envir)
+collapse_envir <- lapply(collapse_envir, unique)
+
+spring_collapsed_locations <- collapse_shap(sv_spring$S, collapse_locations)
+autumn_collapsed_locations <- collapse_shap(sv_autumn$S, collapse_locations)
+
+spring_collapsed_envir <- collapse_shap(sv_spring$S, collapse_envir)
+autumn_collapsed_envir <- collapse_shap(sv_autumn$S, collapse_envir)
+```
+
+
 
 ```{r}
 preds_autumn <- model_autumn$learner$predict(model_autumn$task)
