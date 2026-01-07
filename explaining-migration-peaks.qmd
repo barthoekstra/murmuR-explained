@@ -62,11 +62,13 @@ autumn_task <- create_task("nlhrw", "autumn")
 spring_data <- spring_task$data(cols = spring_task$col_info$id)
 autumn_data <- autumn_task$data(cols = autumn_task$col_info$id)
 
-model_autumn <- train_model("nlhrw", "autumn")
-model_spring <- train_model("nlhrw", "spring")
+# model_autumn <- train_model("nlhrw", "autumn")
+# model_spring <- train_model("nlhrw", "spring")
 ```
 
 ```{r}
+#| eval: false
+#| include: true
 additional_cols <- c("year", "datetime", "period_rank_mtr", "night_num", "mt")
 
 # data_autumn <- create_task("nlhrw", "autumn")
@@ -327,7 +329,14 @@ spring_combo <- sv_list_collapsed_to_dataframe(sv_spring_years_combo, "spring", 
 autumn_combo <- sv_list_collapsed_to_dataframe(sv_autumn_years_combo, "autumn", 2017:2024) %>%
   bind_cols(bind_rows(lapply(2017:2024, function(x) return(autumn_ranks_and_datetimes))))
 
+spring_envirs <- sv_list_collapsed_to_dataframe(sv_spring_years_envirs, "spring", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
+
+autumn_envirs <- sv_list_collapsed_to_dataframe(sv_autumn_years_envirs, "autumn", 2017:2024) %>%
+  bind_cols(bind_rows(lapply(2017:2024, function(x) return(autumn_ranks_and_datetimes))))
+
 all_combo <- bind_rows(spring_combo, autumn_combo)
+all_envirs <- bind_rows(spring_envirs, autumn_envirs)
 
 lookup_table <- data.frame(original = colnames(all_combo),
                            envir = unlist(lapply(colnames(all_combo), function(x) str_split(x, pattern = "/")[[1]][1])),
@@ -336,42 +345,36 @@ lookup_table <- data.frame(original = colnames(all_combo),
 
 all_combo %>%
   data.table::as.data.table() %>%
-  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime, nightly_mt, nightly_mt_rank), 
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime, nightly_mt, nightly_mt_rank, mtr, year), 
                names_to = "envir_combo", values_to = "shap") %>%
   # separate_wider_delim(envir, delim = "/", names = c("envir", "location")) %>%
   identity() -> all_combo_preprocessed
 
+all_envirs %>%
+  data.table::as.data.table() %>%
+  pivot_longer(cols = -c(year_held_out, season, period_rank_mtr, datetime, nightly_mt, nightly_mt_rank, mtr, year), 
+               names_to = "envir", values_to = "shap") %>%
+  mutate(year = lubridate::year(datetime)) %>%
+  identity() -> all_envirs_preprocessed
+
 all_combo_preprocessed <- left_join(all_combo_preprocessed, lookup_table, by = c("envir_combo" = "original")) %>%
   mutate(year = lubridate::year(datetime)) %>%
   as.data.table()
-
-all_combo_preprocessed %>%
-  filter(!envir %in% c("Height", "Day of year", "Nr. of birds", "Time of night", "Land-sea mask"),
-         year_held_out == 2017) %>%
-  # filter(envir == "Temperature") %>%
-  identity() -> all_combo_preprocessed2
-  
-  
-all_combo_preprocessed2 %>%
-  group_by(year, season, envir, location) %>%
-  slice_sample(n = 500) %>%
-  identity() %>%
-  # head()
-  ggplot(aes(x = period_rank_mtr, y = shap, color = location, group = interaction(year, location))) +
-  # geom_point(alpha = 0.01) +
-  geom_smooth() +
-  scale_x_reverse() +
-  facet_wrap(vars(envir, season), scales = "free_y") +
-  labs(x = "Ranked night", y = "SHAP")
 ```
 
 
 ```{r}
-all_combo_preprocessed %>%
-  filter(!envir %in% c("Height", "Day of year", "Nr. of birds", "Time of night", "Land-sea mask"),
-         year_held_out == 2017) %>%
-  # filter(envir == "Temperature") %>%
-  as.data.table() %>%
+DT <- as.data.table(all_combo_preprocessed)
+DT <- DT[!envir %chin% c("Height", "Day of year", "Nr. of birds", "Time of night", "Land-sea mask")]
+by_cols <- setdiff(names(DT), c("year_held_out", "shap"))
+DT_avg <- DT[, .(shap = mean(shap, na.rm = TRUE)), by = by_cols]
+  
+DT_envirs <- as.data.table(all_envirs_preprocessed)
+DT_envirs <- DT_envirs[!envir %chin% c("Height")]
+by_cols <- setdiff(names(DT_envirs), c("year_held_out", "shap"))
+DT_envirs_avg <- DT_envirs[, .(shap = mean(shap, na.rm = TRUE)), by = by_cols]
+  
+DT_avg %>%
   group_by(year, period_rank_mtr, envir, season, location, nightly_mt, nightly_mt_rank) %>%
   summarise(mean_shap = mean(shap),
             real_dt = min(datetime),
@@ -379,8 +382,20 @@ all_combo_preprocessed %>%
   ungroup() %>%
   mutate(season_human = str_to_sentence(season),
          season_human = fct_relevel(as.factor(season_human), "Spring", "Autumn"),
-         location = fct_relevel(as.factor(location), "Radar-level", "En-route", "Stopover")) %>%
+         location = fct_relevel(as.factor(location), "Radar-level", "En-route", "Stopover"),
+         envir = fct_relevel(as.factor(envir), "Wind", "Temperature", "Boundary layer height")) %>%
   identity() -> all_combo_small
+
+DT_envirs_avg %>%
+  group_by(year, period_rank_mtr, envir, season, nightly_mt, nightly_mt_rank) %>%
+  summarise(mean_shap = mean(shap),
+            real_dt = min(datetime),
+            disp_dt = update(real_dt, year = 2000)) %>%
+  ungroup() %>%
+  mutate(season_human = str_to_sentence(season),
+         season_human = fct_relevel(as.factor(season_human), "Spring", "Autumn")) %>%
+         # envir = fct_relevel(as.factor(envir), "Wind", "Temperature", "Boundary layer height")) %>%
+  identity() -> all_envirs_small
 
 cbrt_trans <- scales::trans_new(
   name = "cbrt",
@@ -389,48 +404,317 @@ cbrt_trans <- scales::trans_new(
 )
 
 all_combo_small %>%
-  ggplot(aes(x = nightly_mt_rank, y = year, fill = nightly_mt)) +
-  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000)) +
-  geom_raster() + 
+  group_by(nightly_mt_rank, season, season_human) %>%
+  summarise(nightly_mt = mean(nightly_mt),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_mt
+
+all_combo_small %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  group_by(nightly_mt_rank, season, season_human, envir, location) %>%
+  summarise(mean_shap = mean(mean_shap),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_shap
+
+breaks_mt_ranked <- c("Avg.", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024")
+labels_mt_ranked <- c("Avg.", "", "2018", "", "2020", "", "2022", "", "2024")
+
+all_combo_small %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_mt) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  ggplot(aes(x = nightly_mt_rank, y = year_string, fill = nightly_mt)) +
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
+                       breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
+  geom_raster() +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   ggh4x::facet_grid2(cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
   coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    legend.position = "top",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
   labs(y = "Year", x = "") -> plot_mt_ranked
 
 all_combo_small %>%
   filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
-  ggplot(aes(x = nightly_mt_rank, y = year)) +
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_shap) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  # identity() -> z
+  ggplot(aes(x = nightly_mt_rank, y = year_string)) +
   geom_raster(aes(fill = mean_shap)) +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   khroma::scale_fill_vik(name = "Mean SHAP value") +
   ggh4x::facet_grid2(rows = vars(envir, location), cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
   coord_cartesian(expand = FALSE) +
-  labs(y = "Year", x = "") -> plot_envir_ranked
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
+  labs(y = "Year", x = "Ranked night") -> plot_envir_ranked
 
-plot_mt_ranked / plot_envir_ranked + plot_layout(heights = c(1, 8))
+plot_mt_ranked / plot_envir_ranked + plot_layout(heights = c(1, 8), axes = "collect")
+
+ggsave("plots/mt_shap_ranked.png", width = 12, height = 14)
+ggsave("plots/mt_shap_ranked.pdf", width = 12, height = 14)
 ```
 
 ```{r}
 all_combo_small %>%
-  ggplot(aes(x = as.Date(disp_dt), y = year)) +
-  geom_raster(aes(fill = nightly_mt)) + 
-  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000)) +
-  # scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  mutate(disp_dt = as.Date(disp_dt)) %>%
+  group_by(disp_dt, season, season_human) %>%
+  summarise(nightly_mt = mean(nightly_mt),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_mt_chronological
+
+all_combo_small %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  mutate(disp_dt = as.Date(disp_dt)) %>%
+  group_by(disp_dt, season, season_human, envir, location) %>%
+  summarise(mean_shap = mean(mean_shap),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_shap_chronological
+
+breaks_mt_ranked <- c("Avg.", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024")
+labels_mt_ranked <- c("Avg.", "", "2018", "", "2020", "", "2022", "", "2024")
+
+all_combo_small %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_mt_chronological) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  # identity() -> z
+  ggplot(aes(x = as.Date(disp_dt), y = year_string, fill = nightly_mt)) +
+  geom_raster() + 
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
+                     breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   facet_grid2(cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
   coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    legend.position = "top",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
   labs(y = "Year", x = "") -> plot_mt_chronological
 
 all_combo_small %>%
   filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
-  ggplot(aes(x = as.Date(disp_dt), y = year)) +
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_shap_chronological) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
   geom_raster(aes(fill = mean_shap)) +
-  scale_fill_vik() +
+  scale_fill_vik(name = "Mean SHAP value") +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   facet_grid2(rows = vars(envir, location), cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
   coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
   labs(y = "Year", x = "") -> plot_envir_chronological
 
-plot_mt_chronological / plot_envir_chronological + plot_layout(heights = c(1, 8))
+plot_mt_chronological / plot_envir_chronological + plot_layout(heights = c(1, 8), axes = "collect")
+
+ggsave("plots/mt_shap_chronological.png", width = 12, height = 14)
+ggsave("plots/mt_shap_chronological.pdf", width = 12, height = 14)
 ```
+
+```{r}
+all_envirs_small %>%
+  group_by(nightly_mt_rank, season, season_human) %>%
+  summarise(nightly_mt = mean(nightly_mt),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_mt_envirs
+
+all_envirs_small %>%
+  # filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  group_by(nightly_mt_rank, season, season_human, envir) %>%
+  summarise(mean_shap = mean(mean_shap),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_shap_envirs
+
+all_envirs_small %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_mt_envirs) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  ggplot(aes(x = nightly_mt_rank, y = year_string, fill = nightly_mt)) +
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
+                       breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
+  geom_raster() +
+  scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
+  ggh4x::facet_grid2(cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    legend.position = "top",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
+  labs(y = "Year", x = "") -> plot_mt_ranked_envirs
+
+all_envirs_small %>%
+  # filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_shap_envirs) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked),
+         envir_short = case_when(
+           envir == "Boundary layer height" ~ "Blh.",
+           envir == "Cloud cover" ~ "Cc.",
+           envir == "Day of year" ~ "Day",
+           envir == "Humidity" ~ "Hum.",
+           envir == "Land-sea mask" ~ "Topog.",
+           envir == "Nr. of birds" ~ "Sims.",
+           envir == "Precipitation" ~ "Precip.",
+           envir == "Pressure" ~ "Press.",
+           envir == "Temperature" ~ "Temp.",
+           envir == "Time of night" ~ "Time",
+           envir == "Wind" ~ "Wind"
+         )) %>%
+  # identity() -> z
+  ggplot(aes(x = nightly_mt_rank, y = year_string)) +
+  geom_raster(aes(fill = mean_shap)) +
+  scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
+  khroma::scale_fill_vik(name = "Mean SHAP value") +
+  ggh4x::facet_grid2(rows = vars(envir_short), cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc"),
+    # strip.text.y.right = element_text(angle = 0)
+  ) +
+  labs(y = "Year", x = "Ranked night") -> plot_envir_ranked
+
+plot_mt_ranked_envirs / plot_envir_ranked + plot_layout(heights = c(1, 11), axes = "collect")
+
+ggsave("plots/mt_shap_envirs_ranked.png", width = 12, height = 14)
+ggsave("plots/mt_shap_envirs_ranked.pdf", width = 12, height = 14)
+```
+
+```{r}
+all_envirs_small %>%
+  mutate(disp_dt = as.Date(disp_dt)) %>%
+  group_by(disp_dt, season, season_human) %>%
+  summarise(nightly_mt = mean(nightly_mt),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_mt_envirs_chronological
+
+all_envirs_small %>%
+  # filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  mutate(disp_dt = as.Date(disp_dt)) %>%
+  group_by(disp_dt, season, season_human, envir) %>%
+  summarise(mean_shap = mean(mean_shap),
+            year_string = "Avg.") %>%
+  ungroup() %>%
+  identity() -> average_nightly_shap_envirs_chronological
+
+breaks_mt_ranked <- c("Avg.", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024")
+labels_mt_ranked <- c("Avg.", "", "2018", "", "2020", "", "2022", "", "2024")
+
+all_envirs_small %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_mt_envirs_chronological) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
+  # identity() -> z
+  ggplot(aes(x = as.Date(disp_dt), y = year_string, fill = nightly_mt)) +
+  geom_raster() + 
+  scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
+                     breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
+  facet_grid2(cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    legend.position = "top",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
+  labs(y = "Year", x = "") -> plot_mt_envirs_chronological
+
+all_envirs_small %>%
+  # filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  ungroup() %>%
+  mutate(year_string = as.character(year)) %>%
+  bind_rows(average_nightly_shap_envirs_chronological) %>%
+  mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked),
+         envir_short = case_when(
+           envir == "Boundary layer height" ~ "Blh.",
+           envir == "Cloud cover" ~ "Cc.",
+           envir == "Day of year" ~ "Day",
+           envir == "Humidity" ~ "Hum.",
+           envir == "Land-sea mask" ~ "Topog.",
+           envir == "Nr. of birds" ~ "Sims.",
+           envir == "Precipitation" ~ "Precip.",
+           envir == "Pressure" ~ "Press.",
+           envir == "Temperature" ~ "Temp.",
+           envir == "Time of night" ~ "Time",
+           envir == "Wind" ~ "Wind"
+         )) %>%
+  ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
+  geom_raster(aes(fill = mean_shap)) +
+  scale_fill_vik(name = "Mean SHAP value") +
+  scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
+  facet_grid2(rows = vars(envir_short), cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
+  coord_cartesian(expand = FALSE) +
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = "right",
+    legend.box.just = "right",
+    legend.key.width = unit(0.08, "npc")
+  ) +
+  labs(y = "Year", x = "") -> plot_envir_envirs_chronological
+
+plot_mt_envirs_chronological / plot_envir_envirs_chronological + plot_layout(heights = c(1, 11), axes = "collect")
+
+ggsave("plots/mt_shap_envirs_chronological.png", width = 12, height = 14)
+ggsave("plots/mt_shap_envirs_chronological.pdf", width = 12, height = 14)
+```
+
+
 
 ```{r}
 cbrt_trans <- scales::trans_new(
