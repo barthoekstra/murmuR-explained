@@ -411,7 +411,7 @@ all_combo_small %>%
   identity() -> average_nightly_mt
 
 all_combo_small %>%
-  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height", "Precipitation")) %>%
   group_by(nightly_mt_rank, season, season_human, envir, location) %>%
   summarise(mean_shap = mean(mean_shap),
             year_string = "Avg.") %>%
@@ -446,7 +446,7 @@ all_combo_small %>%
   labs(y = "Year", x = "") -> plot_mt_ranked
 
 all_combo_small %>%
-  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height", "Precipitation")) %>%
   ungroup() %>%
   mutate(year_string = as.character(year)) %>%
   bind_rows(average_nightly_shap) %>%
