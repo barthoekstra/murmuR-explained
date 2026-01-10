@@ -204,20 +204,21 @@ ggplot() +
   stat_summary_2d(aes(x = rdr_u, y = rdr_v, z = shap), data = shap, bins = 40) +
   geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
   geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
-  ggside::geom_xsidedensity(aes(x = rdr_u, weight = dens), color = "blue", data = shap) +
-  ggside::geom_xsidedensity(aes(x = rdr_u), color = "black", data = shap) +
-  ggside::geom_ysidedensity(aes(y = rdr_v, weight = dens), color = "blue", data = shap) +
-  ggside::geom_ysidedensity(aes(y = rdr_v), color = "black", data = shap) +
+  ggside::geom_xsidedensity(aes(x = rdr_u, weight = dens), data = shap) +
+  ggside::geom_xsidedensity(aes(x = rdr_u), linetype = "dashed", data = shap) +
+  ggside::geom_ysidedensity(aes(y = rdr_v, weight = dens), data = shap) +
+  ggside::geom_ysidedensity(aes(y = rdr_v), linetype = "dashed",  data = shap) +
   scale_fill_vik(name = "SHAP ") +
   scale_color_viridis_c(trans = cbrt_trans) +
   scale_x_continuous(breaks = seq(from = -30, to = 50, by = 10)) +
   scale_y_continuous(breaks = seq(from = -30, to = 40, by = 10)) +
   scale_xsidey_continuous(n.breaks = 3) +
-  scale_ysidex_continuous(n.breaks = 3) +
+  scale_ysidex_continuous(guide = guide_axis(angle = -90), n.breaks = 3) +
+  coord_fixed() +
   facet_wrap(vars(season)) +
   labs(x = "U component of wind [m/s]", y = "V component of wind [m/s]") +
-  theme_bw(base_size = 14) + 
-  facet_wrap(vars(season))
+  theme_bw(base_size = 14) +
+  theme(ggside.panel.scale = 0.1)
 # This plot shows the effect of wind directions, but this is of course not the same as migration directions. 
 # Since birds can compensate, winds blowing lightly from SW might not be disastrous if you, for example
 # are trying to reach the UK or flying in that direction at least.
