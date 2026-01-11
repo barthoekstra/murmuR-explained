@@ -18,6 +18,8 @@ library(colorspace)
 library(shapviz)
 library(khroma)
 library(ggh4x)
+library(ggside)
+library(ggpointdensity)
 ```
 
 # Preparing the data for model training
@@ -165,15 +167,19 @@ ggplot(sv_autumn, aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FU
 ```
 
 ```{r}
-variables_of_interest <- c("rdr_u", "rdr_v") #, "rdr_blh", "fl_inst_blh", "fl_inst_lsrr", "stp_t2m_168hrs_sum")
+variables_of_interest <- c("rdr_u", "rdr_v", "rdr_blh", "fl_inst_blh", "fl_inst_lsrr", "stp_t2m_168hrs_sum")
+
+season_colors <- c("Autumn" = "#EFB118FF", "Spring" = "#3CA951FF")
 
 spring <- sv_spring_years[[1]]
 autumn <- sv_autumn_years[[1]]
 
 feature_values_spring <- spring$X[variables_of_interest]
 feature_values_autumn <- autumn$X[variables_of_interest]
-shap_values_spring <- data.frame(shap = rowSums(spring$S[, variables_of_interest]))
-shap_values_autumn <- data.frame(shap = rowSums(autumn$S[, variables_of_interest]))
+shap_values_spring <- data.frame(spring$S[, variables_of_interest])
+shap_values_autumn <- data.frame(autumn$S[, variables_of_interest])
+# shap_values_spring <- data.frame(shap = rowSums(spring$S[, variables_of_interest]))
+# shap_values_autumn <- data.frame(shap = rowSums(autumn$S[, variables_of_interest]))
 
 shap_spring <- data.frame(feature_values_spring, shap = shap_values_spring) %>%
   bind_cols(spring_ranks_and_datetimes) %>%
@@ -188,32 +194,34 @@ shap_autumn <- data.frame(feature_values_autumn, shap = shap_values_autumn) %>%
 shap <- bind_rows(shap_spring, shap_autumn) %>%
   mutate(season = factor(season, levels = c("Spring", "Autumn")))
 
-shap %>%
-  filter(nightly_mt_rank < 11) %>%
-  group_by(nightly_mt_rank, year) %>%
-  summarise(rdr_u = weighted.mean(rdr_u, w = dens),
-            rdr_v = weighted.mean(rdr_v, w = dens)) -> wind_top_nights
-
-shap %>%
-  filter(nightly_mt_rank > 111) %>%
-  group_by(nightly_mt_rank, year) %>%
-  summarise(rdr_u = weighted.mean(rdr_u, w = dens),
-            rdr_v = weighted.mean(rdr_v, w = dens)) -> wind_worst_nights
+shap_wind <- shap %>%
+  mutate(shap_wind = shap.rdr_u + shap.rdr_v)
 
 ggplot() + 
-  stat_summary_2d(aes(x = rdr_u, y = rdr_v, z = shap), data = shap, bins = 40) +
+  stat_summary_2d(aes(x = rdr_u, y = rdr_v, z = shap_wind), data = shap_wind, bins = 40) +
   geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
   geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
-  ggside::geom_xsidedensity(aes(x = rdr_u, weight = dens), data = shap) +
-  ggside::geom_xsidedensity(aes(x = rdr_u), linetype = "dashed", data = shap) +
-  ggside::geom_ysidedensity(aes(y = rdr_v, weight = dens), data = shap) +
-  ggside::geom_ysidedensity(aes(y = rdr_v), linetype = "dashed",  data = shap) +
+  ggside::geom_xsidedensity(aes(x = rdr_u, weight = dens, y = after_stat(scaled), linetype = "Migration-weighted"), 
+                            data = shap_wind, key_glyph = "path") +
+  ggside::geom_xsidedensity(aes(x = rdr_u, y = after_stat(scaled), linetype = "Background"), 
+                            data = shap_wind, key_glyph = "path") +
+  ggside::geom_ysidedensity(aes(y = rdr_v, weight = dens, x = after_stat(scaled), linetype = "Migration-weighted"),
+                            data = shap_wind, key_glyph = "path") +
+  ggside::geom_ysidedensity(aes(y = rdr_v, x = after_stat(scaled), linetype = "Background"),
+                            data = shap_wind, key_glyph = "path") +
   scale_fill_vik(name = "SHAP ") +
   scale_color_viridis_c(trans = cbrt_trans) +
   scale_x_continuous(breaks = seq(from = -30, to = 50, by = 10)) +
   scale_y_continuous(breaks = seq(from = -30, to = 40, by = 10)) +
-  scale_xsidey_continuous(n.breaks = 3) +
-  scale_ysidex_continuous(guide = guide_axis(angle = -90), n.breaks = 3) +
+  scale_xsidey_continuous(breaks = c(0, 1)) +
+  scale_ysidex_continuous(guide = guide_axis(angle = -90), breaks = c(0, 1)) +
+  scale_linetype_manual(
+    name   = "Density type",
+    values = c("Background" = "dashed",
+               "Migration-weighted" = "solid"),
+    breaks = c("Background", "Migration-weighted"),
+    drop   = FALSE
+  ) +
   coord_fixed() +
   facet_wrap(vars(season)) +
   labs(x = "U component of wind [m/s]", y = "V component of wind [m/s]") +
@@ -222,6 +230,148 @@ ggplot() +
 # This plot shows the effect of wind directions, but this is of course not the same as migration directions. 
 # Since birds can compensate, winds blowing lightly from SW might not be disastrous if you, for example
 # are trying to reach the UK or flying in that direction at least.
+
+ggsave("plots/shap_wind.png", width = 12, height = 5)
+ggsave("plots/shap_wind.pdf", width = 12, height = 5)
+```
+
+```{r}
+trim_by_season <- function(df, x, p_lo = 0, p_hi = 1) {
+  x <- rlang::enquo(x)
+
+  lims <- df %>%
+    group_by(season) %>%
+    summarise(
+      x_lo = quantile(!!x, p_lo, na.rm = TRUE),
+      x_hi = quantile(!!x, p_hi, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  df_trim <- df %>%
+    left_join(lims, by = "season") %>%
+    filter((!!x) >= x_lo, (!!x) <= x_hi) %>%
+    select(-x_lo, -x_hi)
+
+  list(data = df_trim, lims = lims)
+}
+
+ylim_effectplots <- c(-0.23, 0.23)
+season_colors <- c("Autumn" = "#EFB118FF", "Spring" = "#3CA951FF")
+
+plot_shared_data <- list(
+  geom_ribbon(aes(ymin = shap_q25, ymax = shap_q75, fill = season), alpha = 0.4),
+  geom_line(aes(y = shap_mean, color = season), linewidth = 0.8),
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed")
+)
+
+plot_shared_decorations <- list(
+  scale_xsidey_continuous(breaks = c(0, 1), limits = c(0, 1.1)),
+  scale_color_manual(values = season_colors, name = "Season"),
+  scale_fill_manual(values = season_colors, name = "Season"),
+  scale_linetype_manual(
+    name   = "Density type",
+    values = c("Background" = "dashed",
+               "Migration-weighted" = "solid"),
+    breaks = c("Background", "Migration-weighted"),
+    drop   = FALSE
+  ),
+  theme_bw(base_size = 14),
+  theme(ggside.panel.scale = 0.15),
+  coord_cartesian(ylim = ylim_effectplots, expand = FALSE),
+  facet_wrap(vars(location))
+)
+
+blh_trim <- trim_by_season(shap, rdr_blh, p_lo = 0, p_hi = 0.95)
+shap_blh_trim <- blh_trim$data
+blh_lims <- blh_trim$lims
+
+shap_binned_blh <- shap_blh_trim %>%
+  mutate(blh_bin = cut_interval(rdr_blh, n = 50)) %>%
+  group_by(season, blh_bin) %>%
+  summarise(
+    rdr_blh_mid = mean(rdr_blh, na.rm = TRUE),
+    shap_mean   = mean(shap.rdr_blh, na.rm = TRUE),
+    shap_q25    = quantile(shap.rdr_blh, 0.25, na.rm = TRUE),
+    shap_q75    = quantile(shap.rdr_blh, 0.75, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(location = "Radar-level")
+
+pl_blh <- ggplot(shap_binned_blh, aes(x = rdr_blh_mid)) +
+  plot_shared_data +
+  ggside::geom_xsidedensity(aes(x = rdr_blh, y = after_stat(scaled), 
+                                weight = nightly_mt, color = season, linetype = "Migration-weighted"), 
+                            data = shap_blh_trim, key_glyph = "path") +
+  ggside::geom_xsidedensity(aes(x = rdr_blh, y = after_stat(scaled), 
+                                color = season, linetype = "Background"), data = shap_blh_trim, key_glyph = "path") +
+  labs(x = "Boundary layer height [m]", y = "Mean SHAP value") +
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000)) +
+  plot_shared_decorations
+
+shap_precip <- shap %>%
+  mutate(fl_inst_lsrr_mmhr = fl_inst_lsrr * 3600)
+
+prec_trim <- trim_by_season(shap_precip, fl_inst_lsrr_mmhr, p_lo = 0, p_hi = 0.95)
+shap_precip_trim <- prec_trim$data
+prec_xlim <- prec_trim$lims
+
+shap_binned_fl_inst_lsrr <- shap_precip_trim %>%
+  mutate(lsrr_bin = cut_interval(fl_inst_lsrr_mmhr, n = 50)) %>%
+  group_by(season, lsrr_bin) %>%
+  summarise(
+    fl_inst_lsrr_mid = mean(fl_inst_lsrr_mmhr, na.rm = TRUE),
+    shap_mean = mean(shap.fl_inst_lsrr, na.rm = TRUE),
+    shap_q25  = quantile(shap.fl_inst_lsrr, 0.25, na.rm = TRUE),
+    shap_q75  = quantile(shap.fl_inst_lsrr, 0.75, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(location = "En-route")
+
+pl_precip <- ggplot(shap_binned_fl_inst_lsrr, aes(x = fl_inst_lsrr_mid)) +
+  plot_shared_data +
+  ggside::geom_xsidedensity(aes(x = fl_inst_lsrr_mmhr, y = after_stat(scaled),
+                                weight = nightly_mt, color = season, linetype = "Migration-weighted"),
+                            data = shap_precip_trim, key_glyph = "path") +
+  ggside::geom_xsidedensity(aes(x = fl_inst_lsrr_mmhr, y = after_stat(scaled), color = season, linetype = "Background"), 
+                            data = shap_precip_trim, key_glyph = "path") +
+  labs(x = "Precipitation [mm/hr]", y = "Mean SHAP value") +
+  plot_shared_decorations
+
+shap_temp <- shap %>%
+  mutate(stp_t2m_168hrs_avg_c = stp_t2m_168hrs_sum / 168 - 273.15)
+
+temp_trim <- trim_by_season(shap_temp, stp_t2m_168hrs_avg_c, p_lo = 0.05, p_hi = 0.95)
+shap_temp_trim <- temp_trim$data
+temp_xlim <- temp_trim$lims
+
+shap_binned_temp <- shap_temp_trim %>%
+  mutate(temp_bin = cut_interval(stp_t2m_168hrs_avg_c, n = 50)) %>%
+  group_by(season, temp_bin) %>%
+  summarise(
+    temp_mid = mean(stp_t2m_168hrs_avg_c, na.rm = TRUE),
+    shap_mean = mean(shap.stp_t2m_168hrs_sum, na.rm = TRUE),
+    shap_q25  = quantile(shap.stp_t2m_168hrs_sum, 0.25, na.rm = TRUE),
+    shap_q75  = quantile(shap.stp_t2m_168hrs_sum, 0.75, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(location = "Stopover")
+
+pl_temp <- ggplot(shap_binned_temp, aes(x = temp_mid)) +
+  plot_shared_data +
+  ggside::geom_xsidedensity(aes(x = stp_t2m_168hrs_avg_c, y = after_stat(scaled),
+                                weight = nightly_mt, color = season, linetype = "Migration-weighted"), 
+                            data = shap_temp_trim, key_glyph = "path") +
+  ggside::geom_xsidedensity(aes(x = stp_t2m_168hrs_avg_c, y = after_stat(scaled), 
+                                color = season, linetype = "Background"), data = shap_temp_trim, key_glyph = "path") +
+  labs(x = "7-day Average temperature [°C]", y = "Mean SHAP value") +
+  plot_shared_decorations
+
+pl_blh +  pl_precip + pl_temp + plot_layout(axes = "collect", guides = "collect")
+ggsave("plots/shap_nonwind.png", width = 12, height = 5)
+ggsave("plots/shap_nonwind.pdf", width = 12, height = 5)
 ```
 
 
