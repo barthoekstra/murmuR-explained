@@ -639,7 +639,7 @@ all_combo_small %>%
   ggplot(aes(x = nightly_mt_rank, y = year_string, fill = nightly_mt)) +
   scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
                        breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
-  geom_raster() +
+  geom_tile() +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   ggh4x::facet_grid2(cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
@@ -663,7 +663,7 @@ all_combo_small %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   # identity() -> z
   ggplot(aes(x = nightly_mt_rank, y = year_string)) +
-  geom_raster(aes(fill = mean_shap)) +
+  geom_tile(aes(fill = mean_shap)) +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   khroma::scale_fill_vik(name = "Mean SHAP value") +
@@ -712,7 +712,7 @@ all_combo_small %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   # identity() -> z
   ggplot(aes(x = as.Date(disp_dt), y = year_string, fill = nightly_mt)) +
-  geom_raster() + 
+  geom_tile() + 
   scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
                      breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
@@ -736,7 +736,7 @@ all_combo_small %>%
   bind_rows(average_nightly_shap_chronological) %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
-  geom_raster(aes(fill = mean_shap)) +
+  geom_tile(aes(fill = mean_shap)) +
   scale_fill_vik(name = "Mean SHAP value") +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   facet_grid2(rows = vars(envir, location), cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
@@ -780,7 +780,7 @@ all_envirs_small %>%
   ggplot(aes(x = nightly_mt_rank, y = year_string, fill = nightly_mt)) +
   scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
                        breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
-  geom_raster() +
+  geom_tile() +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   ggh4x::facet_grid2(cols = vars(season_human), strip = strip_nested(bleed = FALSE)) +
@@ -817,7 +817,7 @@ all_envirs_small %>%
          )) %>%
   # identity() -> z
   ggplot(aes(x = nightly_mt_rank, y = year_string)) +
-  geom_raster(aes(fill = mean_shap)) +
+  geom_tile(aes(fill = mean_shap)) +
   scale_x_reverse(breaks = c(1, 10, 25, 50, 75, 100, 125)) +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   khroma::scale_fill_vik(name = "Mean SHAP value") +
@@ -867,7 +867,7 @@ all_envirs_small %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   # identity() -> z
   ggplot(aes(x = as.Date(disp_dt), y = year_string, fill = nightly_mt)) +
-  geom_raster() + 
+  geom_tile() + 
   scale_fill_viridis_c(trans = cbrt_trans, oob = scales::squish, limit = c(0, 50000), 
                      breaks = c(0, 10000, 25000, 50000), name = "Nightly migration traffic [birds/km]") +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
@@ -904,7 +904,7 @@ all_envirs_small %>%
            envir == "Wind" ~ "Wind"
          )) %>%
   ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
-  geom_raster(aes(fill = mean_shap)) +
+  geom_tile(aes(fill = mean_shap)) +
   scale_fill_vik(name = "Mean SHAP value") +
   scale_y_discrete(breaks = breaks_mt_ranked, labels = labels_mt_ranked) +
   facet_grid2(rows = vars(envir_short), cols = vars(season_human), scales = "free_x", strip = strip_nested(bleed = FALSE)) +
