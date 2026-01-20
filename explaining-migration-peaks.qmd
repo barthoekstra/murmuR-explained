@@ -20,6 +20,7 @@ library(khroma)
 library(ggh4x)
 library(ggside)
 library(ggpointdensity)
+library(ggside)
 ```
 
 # Preparing the data for model training
@@ -157,13 +158,127 @@ sv_list_to_dataframe <- function(sv_list, season, years) {
 sv_spring <- sv_list_to_dataframe(sv_spring_years, "spring", 2017:2024)
 sv_autumn <- sv_list_to_dataframe(sv_autumn_years, "autumn", 2017:2024)
 
-ggplot(sv_spring, aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
+sv_spring %>%
+  filter(variable != "height") %>%
+  ggplot(aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
   geom_point() +
-  labs(x = "Mean absolute SHAP value", y = "Variable")
+  geom_stripped_rows(linewidth = 0) +
+  scale_color_continuous(name = "Year held out", guide = "none") +
+  theme_bw(base_size = 12) +
+  labs(x = "Mean absolute SHAP value", y = "Variable", title = "Spring") -> spring_shap_stability
 
-ggplot(sv_autumn, aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
+sv_autumn %>%
+  filter(variable != "height") %>%
+  ggplot(aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
   geom_point() +
-  labs(x = "Mean absolute SHAP value", y = "Variable")
+  geom_stripped_rows(linewidth = 0) +
+  scale_color_continuous(name = "Year held out") +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.9, 0.5),  # x, y in [0, 1] relative to panel
+    legend.justification = c("right", "center"),
+    legend.background = element_rect(fill = fill_alpha("white", 0.9)),
+    legend.key.size = unit(2, "line"),
+    legend.text = element_text(size = unit(14, "line"))) +
+  labs(x = "Mean absolute SHAP value", y = "Variable", title = "Autumn") -> autumn_shap_stability
+
+spring_shap_stability / autumn_shap_stability +
+  plot_layout(axes = "collect_x", axis_titles = "collect")
+
+ggsave("plots/shap_stability.pdf", height = 29.7/2, width = 21.0/2)
+ggsave("plots/shap_stability.png", height = 29.7/2, width = 21.0/2)
+```
+# This is in the wrong location, but using it here for now
+
+```{r}
+overall_spring <- sv_importance(sv_spring_years[[1]], max_display = 11, kind = "no")
+top_nights_spring <- sv_importance(sv_spring_years[[1]][spring_ranks_and_datetimes$nightly_mt_rank < 11, ], kind = "no")
+worst_nights_spring <- sv_importance(sv_spring_years[[1]][spring_ranks_and_datetimes$nightly_mt_rank > 111, ], kind = "no")
+
+overall_spring <- data.frame(shap = overall_spring) %>% rownames_to_column(var = "variable") %>% mutate(level = "overall")
+top_nights_spring <- data.frame(shap = top_nights_spring) %>% rownames_to_column(var = "variable") %>% mutate(level = "top")
+worst_nights_spring <- data.frame(shap = worst_nights_spring) %>% rownames_to_column(var = "variable") %>% mutate(level = "worst")
+
+overall_autumn <- sv_importance(sv_autumn_years[[1]], max_display = 11, kind = "no")
+top_nights_autumn <- sv_importance(sv_autumn_years[[1]][autumn_ranks_and_datetimes$nightly_mt_rank < 11, ], kind = "no")
+worst_nights_autumn <- sv_importance(sv_autumn_years[[1]][autumn_ranks_and_datetimes$nightly_mt_rank > 111, ], kind = "no")
+
+overall_autumn <- data.frame(shap = overall_autumn) %>% rownames_to_column(var = "variable") %>% mutate(level = "overall")
+top_nights_autumn <- data.frame(shap = top_nights_autumn) %>% rownames_to_column(var = "variable") %>% mutate(level = "top")
+worst_nights_autumn <- data.frame(shap = worst_nights_autumn) %>% rownames_to_column(var = "variable") %>% mutate(level = "worst")
+```
+
+```{r}
+df <- bind_rows(
+  bind_rows(overall_spring, top_nights_spring, worst_nights_spring) %>%
+    mutate(season = "Spring"),
+  bind_rows(overall_autumn, top_nights_autumn, worst_nights_autumn) %>%
+    mutate(season = "Autumn")) %>%
+  mutate(season = factor(season, levels = c("Spring", "Autumn"))) %>%
+  filter(variable != "height") %>%
+  group_by(season, level) %>%
+  slice_max(order_by = shap, n = 10, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    level = case_when(
+      level == "overall" ~ "Overall",
+      level == "top" ~ "Peak nights",
+      level == "worst" ~ "Lowest nights",
+    ),
+    level = factor(level, levels = c("Overall", "Peak nights", "Lowest nights"))
+  )
+
+df_ord <- df %>%
+  group_by(season, variable) %>%
+  summarise(mean_abs_shap = mean(abs(shap), na.rm = TRUE), .groups = "drop")
+
+df %>%
+  left_join(df_ord, by = c("season", "variable")) %>%
+  mutate(
+    variable = case_when(
+      variable == "yday" ~ "Day of year",
+      variable == "rdr_t" ~ "Temperature (R)",
+      variable == "solar_elev" ~ "Solar elevation",
+      variable == "rdr_v" ~ "V-comp. of wind (R)",
+      variable == "fl_inst_blh" ~ "Boundary layer height (E)",
+      variable == "rdr_r_poly1" ~ "Humidity (R)",
+      variable == "fl_inst_lsrr" ~ "Precipitation (E)",
+      variable == "solar_elevation_change" ~ "Solar elev. change",
+      variable == "stp_t2m_168hrs_sum" ~ "Temperature (S)",
+      variable == "rdr_u" ~ "U-comp. of wind (R)",
+      variable == "stp_t2m_3hrs_min" ~ "Temperature (S)",
+      variable == "stp_lsrr_72hrs_min" ~ "Precipitation (S)",
+      variable == "solar_azim" ~ "Solar azimuth",
+      variable == "stp_mcc_168hrs_sum" ~ "Cloud cover (S)",
+      variable == "stp_t2m_72hrs_max" ~ "Temperature (S)",
+      variable == "nr_birds" ~ "Simulated migrants (R)",
+      variable == "rdr_blh" ~ "Boundary layer height (R)",
+      .default = variable), 
+  ) %>%
+  ggplot(aes(
+    x = shap,
+    y = reorder_within(variable, mean_abs_shap, season),
+    fill = level
+  )) +
+  geom_col(position = position_dodge(reverse = TRUE)) +
+  facet_wrap(~ season, scales = "free") +
+  labs(y = "Variable") +
+  scale_y_reordered() +
+  scale_fill_manual(values = c("#4269D0FF", "#3CA951FF", "#FF725CFF"), name = "") +
+  labs(x = "Mean absolute SHAP") +
+  theme_bw(base_size = 14) +
+    theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.35, 0.2),  # x, y in [0, 1] relative to panel
+    legend.justification = c("right", "center"),
+    legend.background = element_blank(),
+    legend.key.size = unit(2, "line"),
+    legend.text = element_text(size = unit(14, "line"))
+  )
+
+ggsave("plots/predictor_ranks.pdf", width = 12, height = 6)
+ggsave("plots/predictor_ranks.png", width = 12, height = 6)
 ```
 
 ```{r}
@@ -226,13 +341,13 @@ ggplot() +
   facet_wrap(vars(season)) +
   labs(x = "U component of wind [m/s]", y = "V component of wind [m/s]") +
   theme_bw(base_size = 14) +
-  theme(ggside.panel.scale = 0.1)
+  theme(ggside.panel.scale = 0.1) -> shap_wind
 # This plot shows the effect of wind directions, but this is of course not the same as migration directions. 
 # Since birds can compensate, winds blowing lightly from SW might not be disastrous if you, for example
 # are trying to reach the UK or flying in that direction at least.
 
-ggsave("plots/shap_wind.png", width = 12, height = 5)
-ggsave("plots/shap_wind.pdf", width = 12, height = 5)
+ggsave(plot = shap_wind, filename = "plots/shap_wind.png", width = 12, height = 5)
+ggsave(plot = shap_wind, filename = "plots/shap_wind.pdf", width = 12, height = 5)
 ```
 
 ```{r}
@@ -369,6 +484,9 @@ pl_temp <- ggplot(shap_binned_temp, aes(x = temp_mid)) +
   labs(x = "7-day Average temperature [°C]", y = "Mean SHAP value") +
   plot_shared_decorations
 
+
+shap_wind / (pl_blh +  pl_precip + pl_temp) + plot_layout(axes = "collect", guides = "collect")
+
 pl_blh +  pl_precip + pl_temp + plot_layout(axes = "collect", guides = "collect")
 ggsave("plots/shap_nonwind.png", width = 12, height = 5)
 ggsave("plots/shap_nonwind.pdf", width = 12, height = 5)
@@ -499,9 +617,6 @@ all_locations %>%
 ```
 
 ```{r}
-spring_ranks_and_datetimes <- select(spring_data, datetime, period_rank_mtr)
-autumn_ranks_and_datetimes <- select(autumn_data, datetime, period_rank_mtr)
-
 spring_envirs <- sv_list_collapsed_to_dataframe(sv_spring_years_envirs, "spring", 2017:2024) %>%
   bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
 
@@ -730,7 +845,7 @@ all_combo_small %>%
   labs(y = "Year", x = "") -> plot_mt_chronological
 
 all_combo_small %>%
-  filter(envir %in% c("Wind", "Temperature", "Boundary layer height")) %>%
+  filter(envir %in% c("Wind", "Temperature", "Boundary layer height", "Precipitation")) %>%
   ungroup() %>%
   mutate(year_string = as.character(year)) %>%
   bind_rows(average_nightly_shap_chronological) %>%
