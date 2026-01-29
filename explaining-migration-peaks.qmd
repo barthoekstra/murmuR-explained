@@ -21,6 +21,8 @@ library(ggh4x)
 library(ggside)
 library(ggpointdensity)
 library(ggside)
+library(tidytext)
+library(ggstats)
 ```
 
 # Preparing the data for model training
@@ -97,6 +99,7 @@ cbrt_trans <- scales::trans_new(
 # model_spring <- train_model("nlhrw", "spring")
 ```
 
+
 ```{r}
 #| eval: false
 #| include: true
@@ -162,8 +165,8 @@ sv_spring %>%
   filter(variable != "height") %>%
   ggplot(aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
   geom_point() +
-  geom_stripped_rows(linewidth = 0) +
-  scale_color_continuous(name = "Year held out", guide = "none") +
+  ggstats::geom_stripped_rows(linewidth = 0) +
+  scale_color_continuous(name = "Year held out") +
   theme_bw(base_size = 12) +
   labs(x = "Mean absolute SHAP value", y = "Variable", title = "Spring") -> spring_shap_stability
 
@@ -171,23 +174,26 @@ sv_autumn %>%
   filter(variable != "height") %>%
   ggplot(aes(x = mean_abs_shap, y = reorder(variable, mean_abs_shap, FUN = mean, decreasing = FALSE), color = year_held_out)) +
   geom_point() +
-  geom_stripped_rows(linewidth = 0) +
+  ggstats::geom_stripped_rows(linewidth = 0) +
   scale_color_continuous(name = "Year held out") +
   theme_bw(base_size = 12) +
-  theme(
-    legend.position = "inside",
-    legend.position.inside = c(0.9, 0.5),  # x, y in [0, 1] relative to panel
-    legend.justification = c("right", "center"),
-    legend.background = element_rect(fill = fill_alpha("white", 0.9)),
-    legend.key.size = unit(2, "line"),
-    legend.text = element_text(size = unit(14, "line"))) +
+  # theme(
+  #   legend.position = "inside",
+  #   legend.position.inside = c(0.9, 0.5),  # x, y in [0, 1] relative to panel
+  #   legend.justification = c("right", "center"),
+  #   legend.background = element_rect(fill = fill_alpha("white", 0.9)),
+  #   legend.key.size = unit(2, "line"),
+  #   legend.text = element_text(size = unit(14, "line"))) +
   labs(x = "Mean absolute SHAP value", y = "Variable", title = "Autumn") -> autumn_shap_stability
 
-spring_shap_stability / autumn_shap_stability +
-  plot_layout(axes = "collect_x", axis_titles = "collect")
+# spring_shap_stability / autumn_shap_stability +
+#   plot_layout(axes = "collect_x", axis_titles = "collect")
 
-ggsave("plots/shap_stability.pdf", height = 29.7/2, width = 21.0/2)
-ggsave("plots/shap_stability.png", height = 29.7/2, width = 21.0/2)
+ggsave(spring_shap_stability, filename = "plots/shap_stability_spring.pdf", height = 29.7/2, width = 21.0/2)
+ggsave(spring_shap_stability, filename = "plots/shap_stability_spring.png", height = 29.7/2, width = 21.0/2)
+
+ggsave(autumn_shap_stability, filename = "plots/shap_stability_autumn.pdf", height = 29.7/2, width = 21.0/2)
+ggsave(autumn_shap_stability, filename = "plots/shap_stability_autumn.png", height = 29.7/2, width = 21.0/2)
 ```
 # This is in the wrong location, but using it here for now
 
@@ -261,7 +267,7 @@ df %>%
     y = reorder_within(variable, mean_abs_shap, season),
     fill = level
   )) +
-  geom_col(position = position_dodge(reverse = TRUE)) +
+  geom_col(position = position_dodge2(reverse = TRUE, preserve = "single")) +
   facet_wrap(~ season, scales = "free") +
   labs(y = "Variable") +
   scale_y_reordered() +
@@ -581,9 +587,6 @@ bind_rows(sv_autumn_years_locations_df, sv_spring_years_locations_df) %>%
 ```
 
 ```{r}
-spring_ranks_and_datetimes <- select(spring_data, datetime, period_rank_mtr)
-autumn_ranks_and_datetimes <- select(autumn_data, datetime, period_rank_mtr)
-
 spring_locations <- sv_list_collapsed_to_dataframe(sv_spring_years_locations, "spring", 2017:2024) %>%
   bind_cols(bind_rows(lapply(2017:2024, function(x) return(spring_ranks_and_datetimes))))
 
@@ -773,7 +776,8 @@ all_combo_small %>%
 all_combo_small %>%
   filter(envir %in% c("Wind", "Temperature", "Boundary layer height", "Precipitation")) %>%
   ungroup() %>%
-  mutate(year_string = as.character(year)) %>%
+  mutate(year_string = as.character(year),
+         envir = forcats::fct_reorder(as.factor(envir), mean_shap, .fun = function(x) mean(abs(x), na.rm = TRUE), .desc = TRUE)) %>%
   bind_rows(average_nightly_shap) %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   # identity() -> z
@@ -847,7 +851,8 @@ all_combo_small %>%
 all_combo_small %>%
   filter(envir %in% c("Wind", "Temperature", "Boundary layer height", "Precipitation")) %>%
   ungroup() %>%
-  mutate(year_string = as.character(year)) %>%
+  mutate(year_string = as.character(year),
+         envir = forcats::fct_reorder(as.factor(envir), mean_shap, .fun = function(x) mean(abs(x), na.rm = TRUE), .desc = TRUE)) %>%
   bind_rows(average_nightly_shap_chronological) %>%
   mutate(year_string = fct_relevel(as.factor(year_string), breaks_mt_ranked)) %>%
   ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
@@ -929,7 +934,8 @@ all_envirs_small %>%
            envir == "Temperature" ~ "Temp.",
            envir == "Time of night" ~ "Time",
            envir == "Wind" ~ "Wind"
-         )) %>%
+         ),
+        envir_short = forcats::fct_reorder(as.factor(envir_short), mean_shap, .fun = function(x) mean(abs(x), na.rm = TRUE), .desc = TRUE)) %>%
   # identity() -> z
   ggplot(aes(x = nightly_mt_rank, y = year_string)) +
   geom_tile(aes(fill = mean_shap)) +
@@ -1017,7 +1023,8 @@ all_envirs_small %>%
            envir == "Temperature" ~ "Temp.",
            envir == "Time of night" ~ "Time",
            envir == "Wind" ~ "Wind"
-         )) %>%
+         ),
+         envir_short = forcats::fct_reorder(as.factor(envir_short), mean_shap, .fun = function(x) mean(abs(x), na.rm = TRUE), .desc = TRUE)) %>%
   ggplot(aes(x = as.Date(disp_dt), y = year_string)) +
   geom_tile(aes(fill = mean_shap)) +
   scale_fill_vik(name = "Mean SHAP value") +
