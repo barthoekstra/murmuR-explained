@@ -40,11 +40,9 @@ git lfs install
 git lfs pull
 ```
 
-Place the 16 existing `sv_spring_2017.RDS` through `sv_spring_2024.RDS` and
-`sv_autumn_2017.RDS` through `sv_autumn_2024.RDS` files in `data/processed/`.
-These files are currently ignored by Git and must accompany the archival data
-package. Verify these inputs with `sha256sum -c processed-data.sha256`.
-A clone alone is therefore not yet sufficient to reproduce the figures.
+The 16 yearly SHAP files for spring/autumn 2017–2024 are tracked with Git LFS
+in `data/processed/` and retrieved by `git lfs pull`. When preparing a release
+data package, include the actual RDS files rather than Git LFS pointers.
 The notebook stops if any required file is absent; it never trains models or
 regenerates processed data.
 
@@ -73,7 +71,6 @@ for the tested run and comparison with committed figures.
 | `data/README.md` | Data structure, row alignment, and provenance gaps |
 | `renv.lock` | Pinned R package versions and installation sources |
 | `.Rprofile`, `renv/` | Project-library activation, renv bootstrap, and settings |
-| `processed-data.sha256` | SHA-256 checksums of the 16 required processed inputs |
 
 The stability panels compare eight models, each trained without one year. Each
 model's SHAP file explains **all** input rows, not just its held-out year.

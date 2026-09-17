@@ -32,10 +32,9 @@ The plotting code verifies predictor values and row counts against the model
 inputs before combining them by row position. Do not sort or filter one side of
 this relationship independently.
 
-The 16 yearly processed files are required for the figures but currently ignored
-by Git. Include them explicitly in the release data package and verify them against
-`processed-data.sha256` at the repository root. The older
-`sv_spring.RDS`, `sv_autumn.RDS`, `sv_all.RDS`, and `sv_all_ranked.RDS` are unused.
+The 16 yearly processed files (spring/autumn 2017–2024) are required for the
+figures and tracked with Git LFS. Run `git lfs pull` from the repository root
+to retrieve them.
 
 ## Fields used directly in figures
 
