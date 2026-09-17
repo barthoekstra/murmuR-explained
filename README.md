@@ -5,20 +5,33 @@ migration models. The figure workflow uses Herwijnen (`nlhrw`) observations from
 2017–2024. Model inputs for Den Helder (`nldhl`) are also retained in the repository,
 but are not used by these figures.
 
+## Source data and processing
+
+The source data and processing workflows underlying this analysis are documented
+in the following repositories:
+
+- [murmuR-paper](https://github.com/barthoekstra/murmuR-paper): analysis and figure
+  scripts accompanying the paper. Zenodo DOI:
+  [10.5281/zenodo.19823028](https://doi.org/10.5281/zenodo.19823028).
+- [murmuR](https://github.com/barthoekstra/murmuR): the R package implementing the
+  migration simulation, data processing, and modelling pipeline. Zenodo DOI:
+  [10.5281/zenodo.19823042](https://doi.org/10.5281/zenodo.19823042).
+
 ## Reproduce the figures
 
-Run commands from the repository root. R 4.5.0 was used for validation; exact
-Quarto 1.6.42 was used for rendering. Installed package versions, including dependencies, are in
-[software-versions.csv](software-versions.csv). This inventory is not an automated
-lockfile. Quarto and the packages below must be installed before rendering:
+Run commands from the repository root. Install R 4.5.0 and Quarto 1.6.42,
+the versions used for validation. Restore the R packages pinned in
+[renv.lock](renv.lock) (internet access is required):
 
-```r
-install.packages(c(
-  "data.table", "tidyverse", "mlr3verse", "mlr3db", "tictoc", "duckdb",
-  "patchwork", "shapviz", "khroma", "ggh4x", "ggside", "tidytext",
-  "ggstats", "knitr", "rmarkdown"
-))
+```sh
+Rscript -e 'renv::restore(prompt = FALSE)'
 ```
+
+The project `.Rprofile` bootstraps `renv` and activates an isolated package
+library. R and Quarto must be installed separately; some R packages may also
+require system libraries or compilers. A complete clean restore has not yet
+been verified. Only run `renv::snapshot()` after deliberately changing and
+validating the project library.
 
 For a Git clone, install Git LFS and retrieve the actual binary files:
 
@@ -58,7 +71,8 @@ for the tested run and comparison with committed figures.
 | `data/processed/sv_{season}_{year}.RDS` | Existing yearly `shapviz` objects required for plotting |
 | `plots/` | Ten figure pairs, each in PNG and PDF format |
 | `data/README.md` | Data structure, row alignment, and provenance gaps |
-| `software-versions.csv` | Installed R package versions used during validation |
+| `renv.lock` | Pinned R package versions and installation sources |
+| `.Rprofile`, `renv/` | Project-library activation, renv bootstrap, and settings |
 | `processed-data.sha256` | SHA-256 checksums of the 16 required processed inputs |
 
 The stability panels compare eight models, each trained without one year. Each
@@ -84,33 +98,10 @@ An explicit opt-in is required because it is slow and overwrites yearly SHAP fil
 REBUILD_SHAP=true Rscript R/prepare_shap.R
 ```
 
-For exact figure reproduction, use the archived processed files. Re-running
-training with different software, threading, or random state has not been shown
-to reproduce those files exactly.
+For exact figure reproduction, use the archived processed files.
 
-## Preparing a Zenodo release
+## License
 
-The project is not yet a complete FAIR deposit. Before release:
+Copyright (c) 2025 Bart Hoekstra.
 
-- Include actual Parquet/RDS/figure contents, not Git LFS pointers, and explicitly
-  include the 16 ignored yearly SHAP files. Exclude `.git/`, session histories,
-  temporary outputs, and the four unused older SHAP snapshots.
-- Complete the data dictionary and upstream provenance described in
-  [data/README.md](data/README.md), including source dataset identifiers, processing
-  versions, units, time conventions, and missing-value meanings.
-- Confirm data redistribution rights and specify the data license. The existing
-  [MIT license](LICENSE) covers the software; it does not document upstream data
-  permissions. Zenodo supports describing files with different licenses.
-- Add release metadata: agreed title, creators and ORCIDs, affiliations, description,
-  keywords, version, related paper/data identifiers, and funding. Reserve the DOI
-  and add it to citation metadata such as `CITATION.cff` before publication.
-- Create a dependency lockfile and test restoration in a clean environment. Retain
-  the tested software inventory and figure comparison report with the release.
-- Include SHA-256 checksums of deposited files. Test reproduction from an extracted
-  release package, without access to local caches or untracked files.
-
-These steps support findability, accessibility, interoperability and reuse through
-persistent identifiers, rich metadata, documented formats, licensing and provenance;
-see the [GO FAIR principles](https://www.go-fair.org/fair-principles/) and
-[Zenodo licensing guidance](https://help.zenodo.org/docs/deposit/describe-records/licenses/).
-No deposit has been created or published by this cleanup.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).

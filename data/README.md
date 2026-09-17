@@ -1,5 +1,17 @@
 # Data used by the figure workflow
 
+## Source data and processing
+
+The source data and processing workflows underlying this analysis are documented
+in the following repositories:
+
+- [murmuR-paper](https://github.com/barthoekstra/murmuR-paper): analysis and figure
+  scripts accompanying the paper. Zenodo DOI:
+  [10.5281/zenodo.19823028](https://doi.org/10.5281/zenodo.19823028).
+- [murmuR](https://github.com/barthoekstra/murmuR): the R package implementing the
+  migration simulation, data processing, and modelling pipeline. Zenodo DOI:
+  [10.5281/zenodo.19823042](https://doi.org/10.5281/zenodo.19823042).
+
 ## Files and relationships
 
 `raw/model_data/{radar}/{radar}_{year}_{season}_3km_noninterpolated.parquet`
