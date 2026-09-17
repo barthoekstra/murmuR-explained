@@ -47,3 +47,14 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Temporary figures and reproducible SHAP caches stay local.
+/plots/temp/
+/data/processed/sv_spring_20[12][0-9].RDS
+/data/processed/sv_autumn_20[12][0-9].RDS
+
+# Older SHAP snapshots are not loaded by the current figure workflow.
+/data/processed/sv_spring.RDS
+/data/processed/sv_autumn.RDS
+/data/processed/sv_all.RDS
+/data/processed/sv_all_ranked.RDS
