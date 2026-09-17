@@ -228,11 +228,11 @@ df <- bind_rows(
   ungroup() %>%
   mutate(
     level = case_when(
-      level == "overall" ~ "Overall",
+      level == "overall" ~ "All",
       level == "top" ~ "Peak nights",
       level == "worst" ~ "Lowest nights",
     ),
-    level = factor(level, levels = c("Overall", "Peak nights", "Lowest nights"))
+    level = factor(level, levels = c("All", "Peak nights", "Lowest nights"))
   )
 
 df_ord <- df %>%
