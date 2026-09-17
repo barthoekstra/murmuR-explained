@@ -12,7 +12,7 @@ execute:
 
 ## Setup
 
-This workflow recreates the current figure exports from existing SHAP results for Herwijnen (`nlhrw`), 2017–2024. Run from the repository root; see the README for software and data requirements. Model training is kept separately in `R/prepare_shap.R` and is never run here.
+This workflow renders the figures from the committed SHAP results for Herwijnen (`nlhrw`), 2017–2024. Run from the repository root; see the [README](README.md) for software and data requirements. Model training is kept separately in `R/prepare_shap.R` and is never run here.
 
 ```{r}
 library(data.table)
@@ -34,7 +34,7 @@ autumn_files <- sprintf("data/processed/sv_autumn_%d.RDS", years)
 missing_files <- c(spring_files, autumn_files)[!file.exists(c(spring_files, autumn_files))]
 if (length(missing_files)) {
   stop("Required processed data are missing: ", paste(missing_files, collapse = ", "),
-       ". Restore these files from the data package; this document does not regenerate them.")
+       ". Run git lfs pull from the repository root to retrieve the committed data files.")
 }
 dir.create("plots", showWarnings = FALSE)
 ```
@@ -141,7 +141,7 @@ ggsave(autumn_shap_stability, filename = "plots/shap_stability_autumn.pdf", heig
 ggsave(autumn_shap_stability, filename = "plots/shap_stability_autumn.png", height = 29.7/2, width = 21.0/2)
 ```
 
-The combined stability panel retains the layout of the earlier committed figure.
+The combined stability figure places the spring panel above the autumn panel.
 
 ```{r}
 combined_stability <-
@@ -160,7 +160,7 @@ ggsave("plots/shap_stability.png", plot = combined_stability, height = 29.7/2, w
 
 ## Predictor importance on peak and low-traffic nights
 
-Peak nights have rank 1–10; the existing low-traffic definition is rank greater than 111.
+Peak nights have rank 1–10; low-traffic nights have rank greater than 111.
 
 ```{r}
 overall_spring <- sv_importance(sv_spring_years[[1]], max_display = 11, kind = "no")
@@ -670,7 +670,7 @@ ggsave("plots/mt_shap_ranked.png", width = 12, height = 14)
 ggsave("plots/mt_shap_ranked.pdf", width = 12, height = 14)
 ```
 
-The chronological location panels retain the existing figure definition: precipitation is shown per year but omitted from the average row.
+In the chronological location panels, precipitation is shown per year but omitted from the average row.
 
 ```{r}
 all_combo_small %>%

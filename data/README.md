@@ -14,15 +14,30 @@ in the following repositories:
 
 ## Files and relationships
 
+Paths below are relative to `data/`. The repository includes:
+
+| Directory | Files | Coverage |
+| --- | --- | --- |
+| `raw/model_data/` | 32 Parquet files | Two radars × two seasons × eight years (2017–2024) |
+| `raw/model_features/` | Four RDS files | One selected predictor vector per radar and season |
+| `raw/model_params/` | Four RDS files | One tuned parameter list per radar and season |
+| `processed/` | 16 RDS files | Herwijnen SHAP objects for two seasons × eight training exclusions |
+
+Radar codes are `nlhrw` (Herwijnen) and `nldhl` (Den Helder); seasons are
+`spring` and `autumn`. All these binary files are tracked with Git LFS.
+
 `raw/model_data/{radar}/{radar}_{year}_{season}_3km_noninterpolated.parquet`
 contains tabular model inputs, read in filename order by `create_task()` in
-`R/functions_training.R`. The current figures use the 16 `nlhrw` files spanning
-spring/autumn 2017–2024. The `nldhl` files are retained but unused by this notebook.
+[`R/functions_training.R`](../R/functions_training.R). The figures use the 16
+`nlhrw` files spanning spring/autumn 2017–2024. The `nldhl` files are retained but unused by this notebook.
 Parquet preserves column types and is readable outside R.
 
 `raw/model_features/fs_selected_top_features_{radar}_{season}_dynamic.RDS`
-contains selected predictor names. The corresponding `raw/model_params/` RDS
-contains tuned learner parameters. Read these R-specific objects with `readRDS()`.
+contains selected predictor names.
+`raw/model_params/fs_twdie_{radar}_{season}_dynamic_regr.rmse_best_params_regr.rmse.RDS`
+contains the corresponding tuned learner parameters. The preprocessing script
+uses these to select model features and configure the LightGBM learner.
+Read these R-specific objects with `readRDS()`.
 
 `processed/sv_{season}_{year}.RDS` is a `shapviz` object. Its `S` matrix contains
 SHAP contributions, `X` contains corresponding predictor values, and `baseline`
@@ -59,6 +74,7 @@ upstream data dictionary.
 | `nr_birds` | Simulated migrant count, grouped at radar level |
 | `rdr_*`, `fl_*`, `stp_*` | Predictor prefixes grouped as radar-level, en-route, and stopover |
 
-Environmental categories are defined by `classify_var_envir()` in the notebook.
+Environmental categories are defined by `classify_var_envir()` in the
+[figure notebook](../explaining-migration-peaks.qmd).
 Grouped SHAP values sum contributions before averaging; height is excluded from
 the displayed importance and environmental summaries.

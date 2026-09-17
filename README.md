@@ -19,9 +19,21 @@ in the following repositories:
 
 ## Reproduce the figures
 
-Run commands from the repository root. Install R 4.5.0 and Quarto 1.6.42,
-the versions used for validation. Restore the R packages pinned in
-[renv.lock](renv.lock) (internet access is required):
+Install Git LFS, R 4.5.0, and Quarto 1.6.42. Clone the repository and retrieve
+the binary data and figures:
+
+```sh
+git lfs install
+git clone https://github.com/barthoekstra/murmuR-explained.git
+cd murmuR-explained
+git lfs pull
+```
+
+For an existing clone, run `git lfs pull` from its repository root. All remaining
+commands run from that root, regardless of the local folder name. You can also
+open `murmuR-explained.Rproj` in RStudio.
+
+Restore the R packages pinned in [renv.lock](renv.lock) (internet access is required):
 
 ```sh
 Rscript -e 'renv::restore(prompt = FALSE)'
@@ -33,18 +45,9 @@ require system libraries or compilers. A complete clean restore has not yet
 been verified. Only run `renv::snapshot()` after deliberately changing and
 validating the project library.
 
-For a Git clone, install Git LFS and retrieve the actual binary files:
-
-```sh
-git lfs install
-git lfs pull
-```
-
-The 16 yearly SHAP files for spring/autumn 2017–2024 are tracked with Git LFS
-in `data/processed/` and retrieved by `git lfs pull`. When preparing a release
-data package, include the actual RDS files rather than Git LFS pointers.
-The notebook stops if any required file is absent; it never trains models or
-regenerates processed data.
+The repository includes all model inputs and the 16 yearly SHAP files needed
+for the figures. The notebook reads these files from `data/`, checks that SHAP
+rows match the model inputs, and renders the figures without retraining models:
 
 ```sh
 quarto render explaining-migration-peaks.qmd
@@ -53,8 +56,8 @@ quarto render explaining-migration-peaks.qmd
 Rendering writes a self-contained HTML document and overwrites the 20 figure files in `plots/`.
 To preserve reference figures, render a copy of the project with its own `plots/`
 directory. The notebook needs substantial RAM: it loads all 16 SHAP files and
-expands their contributions into long tables. See [VALIDATION.md](VALIDATION.md)
-for the tested run and comparison with committed figures.
+expands their contributions into long tables. The committed PNG and PDF files
+in `plots/` can be viewed without running the notebook.
 
 ## Contents and interpretation
 
@@ -68,9 +71,12 @@ for the tested run and comparison with committed figures.
 | `data/raw/model_params/` | Tuned model parameter lists in RDS format |
 | `data/processed/sv_{season}_{year}.RDS` | Existing yearly `shapviz` objects required for plotting |
 | `plots/` | Ten figure pairs, each in PNG and PDF format |
-| `data/README.md` | Data structure, row alignment, and provenance gaps |
+| `data/README.md` | Data coverage, object structure, row alignment, and field descriptions |
 | `renv.lock` | Pinned R package versions and installation sources |
 | `.Rprofile`, `renv/` | Project-library activation, renv bootstrap, and settings |
+| `murmuR-explained.Rproj` | RStudio project settings |
+| `.gitattributes`, `.gitignore` | Git LFS rules and exclusions for generated files |
+| `LICENSE` | GNU GPL v3 license text |
 
 The stability panels compare eight models, each trained without one year. Each
 model's SHAP file explains **all** input rows, not just its held-out year.
@@ -79,23 +85,33 @@ The nightly heatmaps average all eight models. They are therefore not exclusivel
 out-of-sample explanations. SHAP contributions describe model predictions;
 they do not establish causal environmental effects.
 
-The earlier combined `shap_stability` layout is retained alongside the separate
-spring/autumn panels. Exploratory plots and unused calculations have been removed
-from the notebook; they remain available in Git history. Existing untracked files
-and older processed snapshots are not part of the figure workflow.
+## Included figures
+
+Each name below has both a `.png` and a `.pdf` file in `plots/`.
+
+| Figure name | Contents |
+| --- | --- |
+| `shap_stability_spring`, `shap_stability_autumn` | Predictor importance across the eight models for each season |
+| `shap_stability` | Spring and autumn stability panels combined |
+| `predictor_ranks` | Predictor importance ranks overall, on peak nights (ranks 1–10), and on low-traffic nights (ranks greater than 111) |
+| `shap_wind` | Joint SHAP contributions of radar-level wind components and their distributions |
+| `shap_nonwind` | SHAP contributions for boundary layer height, en-route precipitation, and stopover temperature |
+| `mt_shap_ranked`, `mt_shap_chronological` | Nightly migration traffic and SHAP contributions by environment and location, in ranked or calendar order |
+| `mt_shap_envirs_ranked`, `mt_shap_envirs_chronological` | Nightly migration traffic and SHAP contributions grouped by environment, in ranked or calendar order |
 
 ## Optional preprocessing
 
-`R/prepare_shap.R` preserves the original model/SHAP generation workflow separately
-from plotting. It requires LightGBM and its mlr3 learner integration in addition to
-the plotting dependencies. It has not been run end to end during this cleanup.
+`R/prepare_shap.R` trains the Herwijnen seasonal models and generates the 16
+yearly SHAP files using the included model inputs, selected predictors, and tuned
+parameters. It requires LightGBM and its mlr3 learner integration, which are
+included in `renv.lock`. This optional workflow has not been verified end to end.
 An explicit opt-in is required because it is slow and overwrites yearly SHAP files:
 
 ```sh
 REBUILD_SHAP=true Rscript R/prepare_shap.R
 ```
 
-For exact figure reproduction, use the archived processed files.
+To reproduce the figures, use the committed processed files in `data/processed/`.
 
 ## License
 
