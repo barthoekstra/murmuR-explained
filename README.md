@@ -1,4 +1,4 @@
-# Explaining migration peaks
+# murmuR-explained - Explaining bird migration peaks
 
 Code and data for explaining migration peaks with SHAP values from seasonal
 migration models. The figure workflow uses Herwijnen (`nlhrw`) observations from
