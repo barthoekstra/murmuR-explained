@@ -3,3 +3,5 @@
 /plots/** filter=lfs diff=lfs merge=lfs -text
 # Temporary figures are ignored and must not use LFS even if force-added.
 /plots/temp/** -filter -diff -merge -text
+# Keep the data documentation as ordinary reviewable text.
+/data/README.md -filter -merge diff text

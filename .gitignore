@@ -58,3 +58,8 @@ rsconnect/
 /data/processed/sv_autumn.RDS
 /data/processed/sv_all.RDS
 /data/processed/sv_all_ranked.RDS
+
+# Rendered notebook artefacts; final figures remain tracked.
+/explaining-migration-peaks.html
+/explaining-migration-peaks_files/
+/explaining-migration-peaks.rmarkdown
