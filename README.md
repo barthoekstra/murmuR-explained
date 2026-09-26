@@ -1,3 +1,5 @@
+<a href="https://doi.org/10.5281/zenodo.22972199"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.22972199.svg" alt="DOI"></a>
+
 # murmuR-explained - Explaining bird migration peaks
 
 Code and data for explaining migration peaks with SHAP values from seasonal
